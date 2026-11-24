@@ -52,18 +52,21 @@ def main() -> None:
     inference_ms = 0.0
     start = time.time()
     for seq in sequences:
-        paths = [str(seq.image(f)) for f in range(1, seq.length + 1)]
         rows = []
-        for frame, result in enumerate(model.predict(paths, imgsz=args.imgsz, conf=args.conf, batch=args.batch,
-                                                     stream=True, verbose=False), start=1):
-            inference_ms += result.speed["inference"]
-            boxes = result.boxes.cpu().numpy()
-            for (x1, y1, x2, y2), conf, cls in zip(boxes.xyxy, boxes.conf, boxes.cls.astype(int)):
-                if args.coco:
-                    if cls not in COCO_TO_OURS:
-                        continue
-                    cls = COCO_TO_OURS[cls]
-                rows.append((frame, -1, x1, y1, x2 - x1, y2 - y1, conf, cls))
+        # Ultralytics runs a list of paths as a single batch, so pass one batch at a time.
+        for first in range(1, seq.length + 1, args.batch):
+            frames_in_batch = range(first, min(first + args.batch, seq.length + 1))
+            results = model.predict([str(seq.image(f)) for f in frames_in_batch], imgsz=args.imgsz,
+                                    conf=args.conf, verbose=False)
+            for frame, result in zip(frames_in_batch, results):
+                inference_ms += result.speed["inference"]
+                boxes = result.boxes.cpu().numpy()
+                for (x1, y1, x2, y2), conf, cls in zip(boxes.xyxy, boxes.conf, boxes.cls.astype(int)):
+                    if args.coco:
+                        if cls not in COCO_TO_OURS:
+                            continue
+                        cls = COCO_TO_OURS[cls]
+                    rows.append((frame, -1, x1, y1, x2 - x1, y2 - y1, conf, cls))
         df = pd.DataFrame(rows, columns=["frame", "id", "x", "y", "w", "h", "conf", "cls"])
         write_mot(df, args.out / f"{seq.name}.txt")
         frames += seq.length

@@ -91,6 +91,7 @@ Detection and tracking both get full experiments, not detection with a light tra
   - Accuracy (mAP, HOTA) doesn't depend on the GPU, so results stay comparable.
   - Time and energy do. Each job logs its GPU name and power draw, and training cost is reported per GPU type.
   - Inference speed is measured on one GPU type for all models, so speed comparisons stay fair.
+- **Training runs in 2-hour chunks.** The 12-hour D2 jobs waited in the queue (reason `Priority`, estimated start after the deadline), while a 1-hour job started at once: Slurm fills gaps with short jobs. Each run is now submitted with `--time=02:00:00`, followed by resume jobs that continue from `last.pt` (`yolo detect train resume`). At most one epoch is lost per chunk.
 
 ### Experiment plan
 Each experiment answers a question raised by the data.
