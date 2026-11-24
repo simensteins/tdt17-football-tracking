@@ -45,19 +45,39 @@ mAP alone does not capture the downstream need. Priorities for this use case:
 - Their pretraining used 16 H800 GPUs for about 9 days, yet only matches a YOLOv8 + ReID pipeline on HOTA. A useful reference point for the sustainability discussion.
 - They leave out the ball and report goalkeeper/player confusion, both of which we address.
 
+### First data exploration (3 local sequences, all from game 4)
+Scripts: `scripts/explore_labels.py` (label statistics) and `scripts/show_frames.py` (annotations drawn on frames). Results must be confirmed on all 106 sequences, since these three come from one match.
+
+- **Class balance:** players 83 % of boxes, referees 9 %, ball 6 %, goalkeepers 2 % (5 tracks).
+- **The ball cannot be detected at 640 px input.** Median ball box is 13 px at 1920 wide, which becomes about 4 px at 640: 99.9 % of ball boxes fall below 8 px. At 1280 the median is about 9 px. → Train and infer at 1280 or higher, or tile the image; compare resolutions as an experiment. Side referees (linesmen) are also small: 18 % below 8 px at 640.
+- **Every player and referee gap is the person leaving the picture**, not occlusion: median 5 s, up to 19 s, and they return with the same ID. 62 % of player tracks have at least one gap. → A motion-only tracker that keeps lost tracks for about 1 s will assign new IDs on return. Long-term re-identification (appearance, or position on the pitch) is needed for good association.
+- **Camera motion is larger than player motion.** The camera pans mostly horizontally, median 4 px/frame and up to 43 px/frame, while players move about 2 px/frame relative to the camera. Correcting for the pan cuts the share of player boxes with IoU < 0.3 five frames apart from 43 % to 15 %. → Camera motion compensation is worth testing (e.g. BoT-SORT).
+- **IoU matching does not work for the ball.** Its box overlaps its own previous box with median IoU 0.39, and 42 % of consecutive pairs fall below 0.3, with or without pan correction. → Associate the ball by distance or handle it separately from the people.
+- **The ball is labelled when visible and dropped when hidden.** It is present in 98–100 % of frames; its gaps (about 17 frames) happen mid-picture, during duels.
+- **There can be two balls.** In SNMOT-061 the match ball goes out of play and a ball boy supplies a new one; both are labelled, with different IDs. → Do not assume exactly one ball per frame.
+- **People who are not labelled:** coaches and stewards on the sideline, ball boys, photographers, camera operators. → An off-the-shelf COCO "person" detector would count these as false positives; a fine-tuned detector learns to ignore them. Matters for any zero-shot baseline.
+- **Crowding is moderate** in these clips: 3.4 % of player boxes overlap another with IoU > 0.3.
+
+### Full label exploration (all 106 sequences, 6 matches)
+Labels for all sequences were copied without images; `scripts/explore_labels.py data/tracking-2023` covers both splits. The findings from the three local sequences hold, with these corrections and additions:
+
+- **Class balance (train):** players 82.5 %, referees 8.4 %, ball 5.6 %, goalkeepers 3.3 % (79 tracks), `other` 0.2 %.
+- **Ball size confirmed:** 97 % of ball boxes are below 8 px at 640 input, 38 % at 1280. Ball heights (median 13 px) and people (median 100 px) are an order of magnitude apart; referees split into far linesmen (about 35 px) and the main referee (about 90 px).
+- **Gaps confirmed:** 49 % of player tracks have a gap, median 4.4 s, up to 29 s; 99 % of them are the player leaving the picture.
+- **Ball association:** median IoU between consecutive ball boxes is 0.54, and 32 % of pairs fall below 0.3. Pan correction does not help, since the ball moves on its own.
+- **Crowding depends on the situation.** 9 % of people overlap another person with IoU > 0.3 overall, but 15 % in corners and free kicks against 4 % in kick-offs and clearances. → Report results per clip type (`actionClass`), not only overall.
+- **Clip types are balanced across matches:** every match has about two corners, free kicks, shots, clearances and so on. The per-type breakdown is therefore not confounded by match.
+- **The test matches are framed differently.** Median player height is 97–102 px in the three training matches, but 120 px in test match 7, 119 px in match 8 and 89 px in match 11. Match 8 also has faster camera pans (95th percentile 27 px/frame against 13–18 in training). → Scale augmentation matters; expect a train–test gap from framing, not only from kits and stadiums.
+- **Camera cuts appear only in the test set.** In 6 test sequences (125, 133, 137, 147, 148, 150) most people jump at once in a single frame, i.e. a cut or abrupt zoom. No training sequence has one. → Motion-based association will break at these frames; worth showing as a failure case.
+- **Label noise is small:** one zero-width box (SNMOT-065, dropped) and about 54 single-frame jumps where one track's box leaps elsewhere and back (largest: SNMOT-169 track 9, 934 px).
+- **`other` role:** 10 tracks in 4 sequences (train 076, 166; test 133, 188), 0.2 % of boxes, similar in size to players. What they show still needs a visual check.
+- **Validation split kept:** game 6 is held out. None of the training matches resembles the test framing, so the choice between them matters little.
+
 ---
 
-## Open questions for data exploration
+## Open questions
 
-| Question | Decision it drives |
+| Question | How to answer it |
 |---|---|
-| Class counts across all sequences | Imbalance handling; whether goalkeepers are learnable as a class |
-| Box sizes per class | Input resolution (640 / 1280 / tiling) |
-| Ball annotation frequency, size, position | Special handling for the ball |
-| Box overlap and crowd density | NMS settings, occlusion difficulty |
-| Track lengths, gap lengths, re-entries | Tracker buffer length; need for ReID |
-| Camera motion between frames | Need for camera motion compensation |
-| Differences between matches | Expected generalisation to the test matches |
-| Visual check of annotations | Unlabelled people (coaches, substitutes) as false positives; box tightness; ball labelled when hidden |
-| Similarity of consecutive frames | Frame subsampling for training |
-| Match situation per clip (`actionClass`) | Whether some situations are harder |
+| What do the `other` tracks show? | Draw frames from SNMOT-076 or 166 |
+| How much does training on every n-th frame cost? | Train with different strides and compare (consecutive frames are near-identical) |
