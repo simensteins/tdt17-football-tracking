@@ -7,3 +7,4 @@ pandas
 matplotlib
 pillow
 pyyaml
+trackeval @ git+https://github.com/JonathonLuiten/TrackEval.git

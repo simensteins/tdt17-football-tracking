@@ -85,6 +85,13 @@ Detection and tracking both get full experiments, not detection with a light tra
 - **Splits:** train on games 4 and 9, validate on game 6, test once at the end on games 7, 8 and 11.
 - **Augmentation:** scale augmentation (test framing differs); horizontal flips allowed, since team side is not a class.
 
+### Model generation and hardware
+- **YOLO26** (Ultralytics 8.4.218) is the main detector family. It is the newest generation, predicts boxes end-to-end without NMS, and targets small objects, which matters for the ball. YOLO11 is also available if a comparison is needed.
+- **Jobs run on any A100, H100 or H200** (`--constraint=a100|h100|h200` in `jobs/gpu.slurm`). The first plan was A100 only, so that training times and energy would be comparable. But waiting for one GPU type cost more time than the comparison was worth, with three days left. IDUN also has P100 and V100, which are left out: they have at most 32 GB and are several times slower, and a 1280 training run would risk the 12-hour limit.
+  - Accuracy (mAP, HOTA) doesn't depend on the GPU, so results stay comparable.
+  - Time and energy do. Each job logs its GPU name and power draw, and training cost is reported per GPU type.
+  - Inference speed is measured on one GPU type for all models, so speed comparisons stay fair.
+
 ### Experiment plan
 Each experiment answers a question raised by the data.
 
@@ -102,6 +109,48 @@ Each experiment answers a question raised by the data.
 | T5 | Offline gap interpolation | What does post-match processing gain? |
 
 Detection metrics: precision, recall, mAP@50, mAP@50:95, per class (ball separate), per test match and per clip type. Reference tracking results on the same benchmark: SoccerMaster Table 5, HOTA 54.6–59.8.
+
+---
+
+## Results
+
+### D1: COCO-pretrained YOLO26m, no fine-tuning (validation match 6, 2,850 frames)
+COCO classes `person` (players, goalkeepers and referees merged) and `sports ball`. Inference on an A100: 1.6 ms per image at 640, 5.8 ms at 1280.
+
+| Input | Class | P | R | mAP@50 | mAP@50:95 |
+|---|---|---|---|---|---|
+| 640 | person | 0.913 | 0.873 | 0.887 | 0.496 |
+| 640 | ball | 0.613 | 0.316 | 0.294 | 0.103 |
+| 1280 | person | 0.889 | 0.922 | 0.904 | 0.520 |
+| 1280 | ball | 0.643 | 0.377 | 0.375 | 0.134 |
+
+- People are found well even without fine-tuning (recall 0.87–0.92), but mAP@50:95 stays around 0.5: the boxes do not match the SoccerNet annotation style tightly, and the model cannot tell players, goalkeepers and referees apart.
+- The ball is the weak point: 32 % found at 640, 38 % at 1280.
+- Doubling the resolution raises ball mAP@50 by 28 % (0.294 → 0.375) and person recall from 0.87 to 0.92, at 3.6× the inference time. The resolution effect is visible before any fine-tuning.
+
+### Tracking pipeline design
+- **Detect once, track many times.** `scripts/detect.py` (GPU) stores every detection down to confidence 0.01 per sequence; `scripts/track.py` (CPU) runs any tracker configuration on stored detections or on the ground truth. Tracker settings can be explored without rerunning the detector.
+- **People and ball are tracked by separate tracker instances**, so the ball can never be matched to a person and each can use its own strategy.
+- **Tracks report the matched detection's box**, not the tracker's Kalman-smoothed estimate, so localisation reflects the detector.
+- **Evaluation:** TrackEval HOTA, CLEAR and Identity metrics on three subsets: all four classes, people only, ball only. Scoring the ground truth as a tracker gives 100 on every metric, which checks the pipeline end to end.
+
+### T1/T3: trackers on perfect detections (validation match 6, 19 sequences)
+Ground-truth boxes without IDs, so detection is perfect and only association is tested. People DetA is 99 rather than 100 because a new track is only reported once confirmed.
+
+| Tracker (lost-track buffer) | HOTA all | HOTA people | AssA people | IDSW people | HOTA ball | AssA ball |
+|---|---|---|---|---|---|---|
+| ByteTrack (30 frames, 1.2 s) | 85.8 | 87.9 | 78.0 | 922 | 41.4 | 21.9 |
+| ByteTrack (150 frames, 6 s) | 85.7 | 87.8 | 77.8 | 963 | 41.1 | 21.6 |
+| OC-SORT (30 frames) | 86.7 | 88.7 | 79.3 | 745 | 42.5 | 22.9 |
+| OC-SORT (150 frames) | 87.2 | 89.3 | 80.3 | 777 | 42.5 | 22.8 |
+| OC-SORT (150) + single ball | **89.7** | 89.3 | 80.3 | 777 | **97.0** | **95.9** |
+
+- **Association, not detection, limits people tracking:** with perfect detections AssA is still only 78–80.
+- **A longer buffer barely helps (T3)**, although players are out of view for 4.4 s on median. A player re-entering the picture appears where the motion model cannot predict, especially while the camera pans, so the boxes do not overlap and the kept track cannot be re-attached. → Motion alone cannot re-identify; appearance ReID (T4) or pitch position is needed.
+- **OC-SORT beats ByteTrack** by about 1 HOTA on people, fewer ID switches (745 vs 922).
+- **Corners are hardest:** HOTA 77 against 90 for shots on target, matching the crowding measured in the data.
+- **General trackers fail on the ball** even with perfect detections (AssA 22): IoU matching does not work for a small, fast object.
+- **Decision: track the ball with a one-ball prior.** Keep the most confident ball detection per frame under one ID (`--ball single`). Ball HOTA rises from 42.5 to 97.0 on perfect detections. With real detections, false ball detections become the risk, so the confidence threshold needs tuning on validation.
 
 ---
 
