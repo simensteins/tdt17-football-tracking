@@ -9,6 +9,8 @@ venv/
 # Data, weights and run outputs
 data/
 runs/
+logs/*
+!logs/.gitkeep
 outputs/
 wandb/
 *.pt

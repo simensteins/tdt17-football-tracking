@@ -70,8 +70,38 @@ Labels for all sequences were copied without images; `scripts/explore_labels.py 
 - **The test matches are framed differently.** Median player height is 97–102 px in the three training matches, but 120 px in test match 7, 119 px in match 8 and 89 px in match 11. Match 8 also has faster camera pans (95th percentile 27 px/frame against 13–18 in training). → Scale augmentation matters; expect a train–test gap from framing, not only from kits and stadiums.
 - **Camera cuts appear only in the test set.** In 6 test sequences (125, 133, 137, 147, 148, 150) most people jump at once in a single frame, i.e. a cut or abrupt zoom. No training sequence has one. → Motion-based association will break at these frames; worth showing as a failure case.
 - **Label noise is small:** one zero-width box (SNMOT-065, dropped) and about 54 single-frame jumps where one track's box leaps elsewhere and back (largest: SNMOT-169 track 9, 934 px).
-- **`other` role:** 10 tracks in 4 sequences (train 076, 166; test 133, 188), 0.2 % of boxes, similar in size to players. What they show still needs a visual check.
+- **`other` role:** 10 tracks in 4 sequences (train 076, 166; test 133, 188), 0.2 % of boxes. In SNMOT-076 (a substitution) they are staff on the pitch: two medics escorting an injured player and the fourth official holding the substitution board. Staff on the sideline in the same frame are not labelled, so the labelling of non-players is inconsistent.
+- **Decision: drop `other` from training and evaluation.** The system covers four classes: player, goalkeeper, referee, ball. Too few `other` tracks exist to learn a class, merging them into `player` would contradict the many unlabelled staff elsewhere and leak staff into player statistics, and staff are not part of the analysis. Cost: about 0.2 % of ground-truth boxes are excluded from tracking evaluation, which is stated with the results.
 - **Validation split kept:** game 6 is held out. None of the training matches resembles the test framing, so the choice between them matters little.
+
+### Scope: working alone, aiming at the two-person scope
+Detection and tracking both get full experiments, not detection with a light tracking add-on. Deadline Friday 2026-11-27.
+
+### Method: tracking-by-detection with Ultralytics YOLO
+- **Detector:** Ultralytics YOLO fine-tuned from COCO weights, four classes (player, goalkeeper, referee, ball).
+  - **Why:** mature, fast to train, handles high input resolution (needed for the ball), and the same library provides trackers. Time goes into experiments rather than plumbing.
+  - **Rejected:** SoccerMaster and similar end-to-end models (compute far beyond reach); a DETR-only approach (slower to train, weaker on tiny objects). RT-DETR is kept as an architecture comparison.
+- **Tracker:** Ultralytics ByteTrack and BoT-SORT, evaluated with TrackEval (HOTA, DetA, AssA, ID switches).
+- **Splits:** train on games 4 and 9, validate on game 6, test once at the end on games 7, 8 and 11.
+- **Augmentation:** scale augmentation (test framing differs); horizontal flips allowed, since team side is not a class.
+
+### Experiment plan
+Each experiment answers a question raised by the data.
+
+| # | Experiment | Question |
+|---|---|---|
+| D1 | COCO-pretrained YOLO without fine-tuning (person + sports ball) | Why fine-tune? Expected: staff false positives, missed ball |
+| D2 | Fine-tuned at 640 vs 1280 input | Does the ball become detectable? |
+| D3 | Model size s / m / l at the best resolution | Speed vs accuracy vs energy |
+| D4 | Training on every 5th vs every 25th frame | How redundant are consecutive frames? |
+| D5 | RT-DETR, and tiled inference for the ball | Different architecture; dedicated small-object handling |
+| T1 | ByteTrack on `det.txt` (perfect detections) vs on our detections | How much HOTA is lost to detection vs association? |
+| T2 | ByteTrack vs BoT-SORT with camera motion compensation | Does pan correction help? |
+| T3 | Track buffer about 1 s vs about 6 s | Do longer buffers prevent new IDs after players re-enter? |
+| T4 | BoT-SORT with appearance ReID | Does appearance re-identification help on top? |
+| T5 | Offline gap interpolation | What does post-match processing gain? |
+
+Detection metrics: precision, recall, mAP@50, mAP@50:95, per class (ball separate), per test match and per clip type. Reference tracking results on the same benchmark: SoccerMaster Table 5, HOTA 54.6–59.8.
 
 ---
 
@@ -79,5 +109,4 @@ Labels for all sequences were copied without images; `scripts/explore_labels.py 
 
 | Question | How to answer it |
 |---|---|
-| What do the `other` tracks show? | Draw frames from SNMOT-076 or 166 |
 | How much does training on every n-th frame cost? | Train with different strides and compare (consecutive frames are near-identical) |

@@ -21,6 +21,10 @@ import pandas as pd
 
 CLASSES = ("player", "goalkeeper", "referee", "ball")
 
+# Matches used for each split. Train and test share no match; validation is a
+# whole training match held out, so clips of one match never sit on both sides.
+SPLITS = {"train": (4, 9), "val": (6,), "test": (7, 8, 11)}
+
 GT_COLUMNS = ["frame", "track", "x", "y", "w", "h", "conf", "c8", "c9", "c10"]
 
 
