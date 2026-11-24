@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+
+# Data, weights and run outputs
+data/
+runs/
+outputs/
+wandb/
+*.pt
+*.pth
+*.onnx
+*.zip
+
+# Course material
+*.pdf
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
