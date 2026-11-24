@@ -18,4 +18,10 @@ The dataset is not included in this repository. On IDUN it is available at:
 /cluster/projects/vc/courses/TDT17/2026/3_fotball/SoccerNet-Tracking-2023/tracking-2023/
 ```
 
-Locally, place it under `data/` (ignored by git).
+Locally, place the sequences under `data/` (ignored by git):
+
+```
+data/tracking-2023/
+├── train/SNMOT-xxx/{seqinfo.ini, gameinfo.ini, det/, gt/, img1/}
+└── test/SNMOT-xxx/...
+```
