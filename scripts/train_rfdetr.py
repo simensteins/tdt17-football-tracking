@@ -13,6 +13,9 @@ RF-DETR resizes frames to a square without keeping the aspect ratio, so at
 1280 a 16 px ball becomes about 11 x 19 px. Its default scale jitter crops
 frames to 384-600 px first, which would shrink the ball to 2-3 px, so it is
 turned off. Writes checkpoint_best_total.pth and metrics.csv to --out.
+
+--hue H shifts all hues of a training image together by up to H of the colour
+wheel, like Ultralytics' hsv_h (needs rfdetr[augment] for Albumentations).
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ def main() -> None:
     parser.add_argument("--batch", type=int, default=4)
     parser.add_argument("--grad-accum", type=int, default=4, help="effective batch = batch x grad-accum")
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--hue", type=float, default=0.0, help="hue shift as a fraction of the colour wheel, e.g. 0.5")
     parser.add_argument("--freeze-encoder", action="store_true", help="keep the DINOv2 backbone fixed")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--resume", type=Path, help="last.ckpt of an interrupted run")
@@ -41,12 +45,19 @@ def main() -> None:
     model_class = {"nano": rfdetr.RFDETRNano, "small": rfdetr.RFDETRSmall,
                    "medium": rfdetr.RFDETRMedium, "large": rfdetr.RFDETRLarge}[args.size]
     model = model_class(freeze_encoder=args.freeze_encoder)
+    augment = {}
+    if args.hue:  # RF-DETR's default is the horizontal flip alone; keep it and add the hue shift
+        augment["aug_config"] = {
+            "HorizontalFlip": {"p": 0.5},
+            "HueSaturationValue": {"hue_shift_limit": round(args.hue * 180), "sat_shift_limit": 0,
+                                   "val_shift_limit": 0, "p": 1.0},  # OpenCV hue runs 0-180
+        }
     model.train(
         dataset_dir=str(args.dataset), dataset_file="yolo", output_dir=str(args.out),
         resolution=args.resolution, epochs=args.epochs, batch_size=args.batch, grad_accum_steps=args.grad_accum,
         lr=args.lr, num_workers=args.workers, seed=0, device="cuda",
         scale_jitter=False, log_per_class_metrics=True, checkpoint_interval=1000,
-        **({"resume": str(args.resume)} if args.resume else {}),
+        **augment, **({"resume": str(args.resume)} if args.resume else {}),
     )
 
 

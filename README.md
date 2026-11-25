@@ -90,6 +90,15 @@ Extra training matches come from the `valid` split of [SoccerNet-GSR](https://hu
 python scripts/make_gsr_dataset.py <path to valid.zip> --out /cluster/work/$USER/yolo/gsr-stride5
 ```
 
+RF-DETR reads one folder per split, so the course and GSR frames are combined with symlinks first. `--hue 0.5` needs `pip install "rfdetr[augment]==1.12.1"`:
+
+```bash
+Y=/cluster/work/$USER/yolo
+python scripts/merge_yolo_datasets.py --out $Y/rfdetr-gsr \
+    --train $Y/stride5/images/train $Y/gsr-stride5/images/train --val $Y/stride5/images/val
+python scripts/train_rfdetr.py $Y/rfdetr-gsr --size medium --resolution 1280 --epochs 4 --hue 0.5 --out <run dir>
+```
+
 ## Repository layout
 
 | Path | Contents |

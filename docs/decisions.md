@@ -256,6 +256,27 @@ Validation mAP@50:95 per epoch: **0.412** 0.405 0.392 0.398 (D2c: 0.401). Goalke
 
 - **RF-DETR detects better** (DetA 73.0 against 72.1) and **finds the ball much better** (+3.5 ball HOTA), but its tracks break more often with YOLO's tracker settings. Re-tuned thresholds (found with OC-SORT on the laptop, then confirmed with BoT-SORT) close the gap on people.
 - After one epoch, the overall gain is small (+0.2) and comes from the ball. The six-epoch run decides.
+
+**Six epochs** (same data and settings, A100, 39 min, 0.16 kWh GPU energy). Validation mAP@50:95 per epoch (EMA weights): 0.431 0.443 0.446 0.445 0.442 0.448.
+
+| Epoch | All | Player | Goalkeeper | Referee | Ball |
+|---|---|---|---|---|---|
+| 1 | 0.431 | 0.584 | 0.418 | 0.546 | 0.176 |
+| 6 (best) | **0.448** | **0.608** | 0.405 | **0.580** | **0.198** |
+
+- **The best detector on mAP** (YOLO D2f: 0.434, D2c: 0.401), and it gains slowly but steadily. Players and referees improve; goalkeepers stay around 0.41.
+
+Tracking on game 6, best checkpoint, with the chosen pipeline (merge 0.7, ball path, gaps ≤ 10):
+
+| Detector | Tracker thresholds | HOTA | People | Ball | DetA | AssA | IDSW | Role accuracy | Goalkeeper recall / precision |
+|---|---|---|---|---|---|---|---|---|---|
+| YOLO D2c | YOLO's | 64.1 | 65.4 | 40.1 | 72.1 | 57.1 | 609 | 96.7 % | 0.39 / 0.66 |
+| RF-DETR, 6 epochs | YOLO's | 65.4 | 66.6 | **44.6** | 73.9 | 58.0 | 726 | **97.9 %** | **0.54** / 0.91 |
+| RF-DETR, 6 epochs | RF-DETR's (`match 0.95, new 0.6, high 0.4`) | **65.8** | **67.0** | **44.6** | **74.1** | **58.5** | **594** | **97.9 %** | **0.54 / 0.92** |
+
+- **The first detector change that clearly carries over to tracking:** +1.7 HOTA over D2c, from better detection (+2.0 DetA) and better association (+1.4 AssA, fewer ID switches). The ball gains +4.5.
+- **Roles are the best of all runs** too: 97.9 %, goalkeeper precision 0.92.
+- The thresholds re-tuned after one epoch still help (+0.4, 132 fewer ID switches).
 - RF-DETR costs about 7× YOLO's model time per frame, which weighs against it in the sustainability discussion unless the gain grows.
 
 ### Extra data: three more matches from SoccerNet-GSR
@@ -276,12 +297,82 @@ Validation mAP@50:95 per epoch: **0.412** 0.405 0.392 0.398 (D2c: 0.401). Goalke
 - Labels (v1.3) cover player, goalkeeper, referee, **ball** and other, with the same box conventions as SoccerNet-Tracking. The GSR paper says the ball is ignored in its benchmark, but the files do contain ball boxes (716 in one clip), so no borrowed labels are needed.
 - Every 5th frame, `other` dropped: **8,700 frames** with 123,928 player, 12,381 referee, 5,203 goalkeeper and 8,179 ball boxes. Spot-checked visually (new stadium, sun and hard shadows, referees in dark kits).
 
-**Experiment D6:** the D2c recipe on games 4 and 9 plus GSR games 2, 3 and 5 (14,400 frames), with the same compute as D2c (6 epochs × 14,400 ≈ 15 × 5,700 images), warmup and mosaic-off phase scaled to the same share. Validation on game 6 as always. Results below when the run has finished.
+**Experiment D6:** the D2c recipe on games 4 and 9 plus GSR games 2, 3 and 5 (14,400 frames), with the same compute as D2c (6 epochs × 14,400 ≈ 15 × 5,700 images), warmup and mosaic-off phase scaled to the same share. Validation on game 6 as always.
+
+| Run | GPU | Best epoch | mAP@50:95 all | Player | Goalkeeper | Referee | Ball mAP@50 | Recall | Time | GPU energy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| D2c (2 matches) | A100 | 8 | 0.401 | **0.614** | 0.251 | **0.581** | 0.459 | 0.68 | 27 min | 0.10 kWh |
+| D6 (5 matches) | A100 | 1 | **0.425** | 0.607 | **0.342** | 0.573 | **0.472** | **0.73** | 28 min | 0.09 kWh |
+
+Validation mAP@50:95 per epoch:
+- D6: 0.425 0.410 0.390 0.412 0.401 0.407 (mean 0.408, last 0.407)
+- D2c: mean 0.392, last 0.397
+
+- **More matches help detection overall.** Every D6 epoch is at or above D2c's mean, and recall goes up on every epoch (0.71–0.76 against 0.67–0.69), so fewer people are missed.
+- **The goalkeeper gain does not last.** At the best epoch (the first) goalkeepers gain +0.09, but at the last epoch, which the final detector would use, they fall to 0.223 (D2c: 0.251). Players (0.618), referees (0.588) and the ball (mAP@50 0.536) are all up at the last epoch.
+
+Tracking with the chosen settings on game 6, last epoch of each (D2c re-run in the same job):
+
+| Detector | HOTA | People | Ball | DetA | AssA | IDSW | Role accuracy | Goalkeeper recall / precision |
+|---|---|---|---|---|---|---|---|---|
+| D2c | 64.1 | 65.4 | 40.1 | 72.1 | 57.1 | 609 | **96.7 %** | 0.39 / **0.66** |
+| D6 | **64.8** | **66.0** | **42.8** | **73.2** | **57.5** | **597** | 92.2 % | **0.66** / 0.29 |
+
+- **Tracking improves (+0.7 HOTA), mostly through the ball (+2.7).**
+- **But roles get worse:** 13,123 player boxes (7 %) are called goalkeepers, against 1,512 with D2c. The model now finds goalkeepers but also sees them where there are none. The GSR matches have different goalkeeper kits, and with only one goalkeeper per team per match, colour is an unreliable cue. → Combined with hue augmentation in D7 (below).
 
 ### D2f: strong hue augmentation
-**Why:** the failures are unseen kit colours. Ultralytics' default augmentation already uses horizontal flips, mosaic, scaling, translation and colour jitter (`hsv_h=0.015`, `hsv_s=0.7`, `hsv_v=0.4`), so mirroring was on in every run. Shifting all hues of an image together (`hsv_h=0.5`, up to half the colour wheel) turns kits into colours never seen, so the model cannot rely on "referee = yellow" and has to use the referee being dressed unlike both teams. Same recipe as D2c otherwise. Results below when the run has finished.
+**Why:** the failures are unseen kit colours. Ultralytics' default augmentation already uses horizontal flips, mosaic, scaling, translation and colour jitter (`hsv_h=0.015`, `hsv_s=0.7`, `hsv_v=0.4`), so mirroring was on in every run. Shifting all hues of an image together (`hsv_h=0.5`, up to half the colour wheel) turns kits into colours never seen, so the model cannot rely on "referee = yellow" and has to use the referee being dressed unlike both teams. Same recipe as D2c otherwise.
 
-### Final detector: trained on all three non-test matches
+| Run | GPU | Best epoch | mAP@50:95 all | Player | Goalkeeper | Referee | Ball mAP@50 | Recall | Time | GPU energy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| D2c | A100 | 8 | 0.401 | **0.614** | 0.251 | **0.581** | 0.459 | 0.68 | 27 min | 0.10 kWh |
+| D2f (`hsv_h=0.5`) | A100 | 13 | **0.434** | 0.611 | **0.384** | 0.564 | **0.490** | **0.72** | 23 min | 0.13 kWh |
+
+Validation mAP@50:95 per epoch: 0.380 0.400 0.421 0.418 0.431 0.416 0.419 0.429 0.430 0.432 0.432 0.426 0.434 0.428 0.431 (last 0.431, D2c 0.397).
+
+- **The largest single gain of all detector experiments** (+0.033 at the best epoch, +0.034 at the last), and as stable as D2c from epoch 5 on.
+- **It is the goalkeepers:** +0.13 mAP@50:95, precision 0.77 and recall 0.54 against D2c's 0.50 and 0.41. With colours scrambled, the model has to find the goalkeeper by position, posture and gloves rather than by a kit colour learnt from two matches. Referees lose a little (−0.017): their kit colour was a useful cue.
+
+Tracking with the chosen settings on game 6 (last epochs):
+
+| Detector | HOTA | People | Ball | DetA | AssA | IDSW | Role accuracy | Goalkeeper recall / precision |
+|---|---|---|---|---|---|---|---|---|
+| D2c | 64.1 | **65.4** | 40.1 | 72.1 | **57.1** | **609** | 96.7 % | 0.39 / 0.66 |
+| D2f | 64.1 | 65.3 | **40.9** | **72.5** | 56.7 | 624 | **97.1 %** | **0.51 / 0.87** |
+
+- **The mAP gain does not show in HOTA.** HOTA treats all people as one class, while D2f's gain is in telling goalkeepers from players. It shows up where it belongs: in role accuracy, the best of all runs, with goalkeeper precision 0.87 against 0.66.
+- For post-match analysis this matters: a player counted as a goalkeeper is lost from the player statistics.
+
+### D7: five matches and hue augmentation
+D6's data with D2f's `hsv_h=0.5`, same compute as D6 (6 epochs). A100, 25 min, 0.09 kWh GPU energy.
+
+Validation mAP@50:95 per epoch: 0.444 0.455 0.467 0.469 0.472 0.474. Last epoch: player 0.624, goalkeeper 0.487, referee 0.580, ball mAP@50 0.533.
+
+Tracking with the chosen settings on game 6 (last epochs; RF-DETR from D5 for comparison):
+
+| Detector | HOTA | People | Ball | DetA | AssA | IDSW | Role accuracy | Goalkeeper recall / precision | Model time per frame |
+|---|---|---|---|---|---|---|---|---|---|
+| D2c | 64.1 | 65.4 | 40.1 | 72.1 | 57.1 | 609 | 96.7 % | 0.39 / 0.66 | 5.5 ms |
+| D6 (5 matches) | 64.8 | 66.0 | 42.8 | 73.2 | 57.5 | 597 | 92.2 % | 0.66 / 0.29 | 5.5 ms |
+| D2f (hue) | 64.1 | 65.3 | 40.9 | 72.5 | 56.7 | 624 | 97.1 % | 0.51 / 0.87 | 5.5 ms |
+| **D7 (5 matches + hue)** | 65.5 | 66.7 | 43.2 | 73.4 | **58.6** | **538** | **98.2 %** | **0.69 / 0.93** | 5.5 ms |
+| RF-DETR, 6 epochs (2 matches) | **65.8** | **67.0** | **44.6** | **74.1** | 58.5 | 594 | 97.9 % | 0.54 / 0.92 | 40 ms |
+
+- **The two changes fix each other's weakness.** More matches gave better detection but confused goalkeepers; hue augmentation stops the model from learning goalkeepers by kit colour, so the extra matches now help roles too. D7 has the best mAP (0.474), the fewest ID switches and the best roles of all runs.
+- **D7 almost reaches RF-DETR (−0.3 HOTA) at a seventh of the model time.** RF-DETR has not had either change yet.
+
+### Final detector, second version: all six non-test matches and hue augmentation
+- **Chosen after D7:** extra matches and hue augmentation are the only YOLO changes that improved tracking. Both are applied to RF-DETR as well. The other YOLO findings do not transfer or are already in place: RF-DETR trains at a constant low learning rate and was stable without freezing (0.442–0.448 over epochs 2–6), and stride, resolution and model size made no difference.
+- **Hue for RF-DETR** is Albumentations' `HueSaturationValue` with a shift of up to ±90 OpenCV hue units, i.e. half the colour wheel, always on, like `hsv_h=0.5` (`scripts/train_rfdetr.py --hue 0.5`). RF-DETR's default horizontal flip is kept.
+- **4 epochs instead of 6**: an epoch now has 2.5–3× more images, so 4 epochs are still 1.7–2× the training steps of D5's six, and RF-DETR gained little after its second epoch.
+- **Three runs, in parallel:**
+  - `rfdetr-m-gsr-hue`: games 4 and 9 plus GSR games 2, 3 and 5 (14,400 frames), validation on game 6. This checks on validation that the changes help RF-DETR, as they did YOLO, before the final model is used.
+  - `rfdetr-m-all-hue`: all six non-test matches (games 2, 3, 4, 5, 6 and 9; 17,250 frames). The final RF-DETR. Its validation set (every 10th game 6 frame) is in the training data, so it only satisfies the loader, and the last epoch is used.
+  - `final-m-1280-gsr-hue`: YOLO with D7's recipe on all six matches. If RF-DETR does not gain clearly over D7 on validation, the YOLO is the final detector: nearly as good at a seventh of the cost.
+- `scripts/merge_yolo_datasets.py` combines the folders, since RF-DETR reads one folder per split.
+
+### Final detector, first version (test runs 1 and 2): trained on all three non-test matches
 - **Settings chosen on validation:** YOLO26m at 1280, frozen backbone, AdamW at learning rate 0.0002, 8 epochs (`final-m-1280-trainval`).
 - **Retrained on games 4, 6 and 9** (8,550 frames). Game 6 was only held out to make choices; with those made, a third match of kits, goalkeepers and stadium is worth more than a validation score. Goalkeepers should gain most.
 - **The last epoch is used, not the "best" one.** Validation is now part of training, so picking an epoch by its validation score would be meaningless. D2c showed the last epoch is as good as the best with this recipe.
