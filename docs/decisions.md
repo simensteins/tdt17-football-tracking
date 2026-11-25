@@ -153,6 +153,24 @@ Ground-truth boxes without IDs, so detection is perfect and only association is 
 - **General trackers fail on the ball** even with perfect detections (AssA 22): IoU matching does not work for a small, fast object.
 - **Decision: track the ball with a one-ball prior.** Keep the most confident ball detection per frame under one ID (`--ball single`). Ball HOTA rises from 42.5 to 97.0 on perfect detections. With real detections, false ball detections become the risk, so the confidence threshold needs tuning on validation.
 
+### T1: trackers on real detections from the COCO model (validation match 6)
+Detections from COCO-pretrained YOLO26m at 1280, no fine-tuning (`scripts/detect.py --coco`, kept down to confidence 0.01). COCO has one person class, so people are evaluated without roles here; role errors are not counted yet.
+
+| Detections + tracker | HOTA all | HOTA people | DetA people | AssA people | LocA people | IDSW people | HOTA ball |
+|---|---|---|---|---|---|---|---|
+| Perfect + OC-SORT (150) + single ball | 89.7 | 89.3 | 99.2 | 80.3 | 99.9 | 777 | 97.0 |
+| COCO + ByteTrack (30) | 55.1 | 56.6 | 66.5 | 48.3 | 83.6 | 1,289 | 18.1 |
+| COCO + OC-SORT (150) | 55.8 | 57.3 | 67.3 | 49.0 | 83.7 | 1,221 | 17.7 |
+| COCO + OC-SORT (150) + single ball | 55.6 | 57.3 | 67.3 | 49.0 | 83.7 | 1,221 | 27.2 |
+| COCO + OC-SORT (150) + single ball, conf ≥ 0.3 | **56.1** | 57.3 | 67.3 | 49.0 | 83.7 | 1,221 | **30.5** |
+
+- **Detection errors cost 32 HOTA on people** (89.3 → 57.3). Both parts drop: DetA from 99 to 67, and AssA from 80 to 49 with the same tracker. Missed and false boxes also break tracks.
+- **The COCO boxes are drawn differently from SoccerNet's.** LocA is 83.7 instead of 99.9. On SNMOT-097, matched COCO boxes are 9 % narrower and 4 % shorter than the ground truth, and start lower. A systematic annotation-style difference, not a bug; fine-tuning (D2) should learn it.
+- **OC-SORT still beats ByteTrack** on real detections (+0.7 HOTA on people, fewer ID switches).
+- **The one-ball prior still helps** (ball HOTA 17.7 → 27.2), and requiring confidence ≥ 0.3 adds 3.3 more by skipping frames whose best ball candidate is a false detection. The ball is now limited by the detector (D1 ball recall 0.38).
+- **Tracking is cheap:** 290–430 frames/s on a laptop CPU, so the detector dominates the compute cost.
+- **Reference point:** SoccerMaster reports HOTA 54.6 for YOLOv8 + OC-SORT on the test set. Our zero-shot COCO baseline reaches 55.8 on validation, but the split and the class handling differ, so the numbers are not directly comparable.
+
 ---
 
 ## Open questions

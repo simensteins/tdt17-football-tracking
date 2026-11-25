@@ -26,6 +26,8 @@ cd "$SLURM_SUBMIT_DIR"
 # Ultralytics treats this as a non-interactive console and prints progress at
 # most once a minute as plain lines, instead of redrawing the bar in the log.
 export GITHUB_ACTIONS=true
+# Write Python output to the log as it happens, not in blocks at the end.
+export PYTHONUNBUFFERED=1
 
 nvidia-smi --query-gpu=timestamp,name,power.draw,utilization.gpu,memory.used \
     --format=csv -l 30 > "logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}-gpu.csv" &
