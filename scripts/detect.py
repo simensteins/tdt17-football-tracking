@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
@@ -36,11 +37,13 @@ def main() -> None:
     parser.add_argument("--imgsz", type=int, default=1280)
     parser.add_argument("--conf", type=float, default=0.01)
     parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--workers", type=int, default=8, help="threads decoding images")
     parser.add_argument("--coco", action="store_true", help="map COCO classes to ours")
     parser.add_argument("--sequences", nargs="*", help="only these sequences (default: whole split)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
 
+    import cv2
     from ultralytics import YOLO
 
     model = YOLO(args.model)
@@ -51,13 +54,21 @@ def main() -> None:
     frames = 0
     inference_ms = 0.0
     start = time.time()
+    # Decoding full-HD JPEGs one at a time left the GPU idle most of the time,
+    # so a thread pool decodes the next batch while the model runs on this one.
+    pool, prefetch = ThreadPoolExecutor(args.workers), ThreadPoolExecutor(1)
     for seq in sequences:
         rows = []
-        # Ultralytics runs a list of paths as a single batch, so pass one batch at a time.
-        for first in range(1, seq.length + 1, args.batch):
-            frames_in_batch = range(first, min(first + args.batch, seq.length + 1))
-            results = model.predict([str(seq.image(f)) for f in frames_in_batch], imgsz=args.imgsz,
-                                    conf=args.conf, verbose=False)
+        batches = [range(first, min(first + args.batch, seq.length + 1))
+                   for first in range(1, seq.length + 1, args.batch)]
+        decode = lambda frames_in_batch: list(pool.map(lambda f: cv2.imread(str(seq.image(f))), frames_in_batch))
+        upcoming = prefetch.submit(decode, batches[0])
+        for i, frames_in_batch in enumerate(batches):
+            images = upcoming.result()
+            if i + 1 < len(batches):
+                upcoming = prefetch.submit(decode, batches[i + 1])
+            # Ultralytics runs a list as a single batch, so pass one batch at a time.
+            results = model.predict(images, imgsz=args.imgsz, conf=args.conf, verbose=False)
             for frame, result in zip(frames_in_batch, results):
                 inference_ms += result.speed["inference"]
                 boxes = result.boxes.cpu().numpy()

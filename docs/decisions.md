@@ -192,6 +192,20 @@ Validation mAP@50:95 per epoch:
 - Low-score matching (`use_byte=true`) adds only 0.8, so it stays off.
 - These detections come from D2's epoch-1 checkpoint, which has barely learned the SoccerNet box style (LocA still 83). D2c should do better.
 
+### T2/T4 first check: camera motion compensation and appearance ReID (SNMOT-060, perfect detections)
+One training clip with images on the laptop, so this is a quick check only, before spending cluster time.
+
+| Tracker | HOTA people | AssA people | IDSW | Speed (laptop CPU) |
+|---|---|---|---|---|
+| OC-SORT (150) | 85.9 | 74.7 | 61 | about 300 frames/s |
+| BoT-SORT, no camera motion compensation | 84.9 | 73.0 | 65 | |
+| BoT-SORT + camera motion compensation (sparse optical flow) | **87.1** | 76.0 | 42 | 25 frames/s |
+| BoT-SORT + camera motion compensation + ReID (`yolo26s-reid`) | 87.1 | 76.1 | 38 | 2 frames/s |
+
+- **Camera motion compensation helps** (+2.1 HOTA over BoT-SORT without it, +1.2 over OC-SORT), as the camera-pan analysis predicted. It needs the images, so it runs on IDUN.
+- **Appearance ReID adds nothing** here at 12× the compute. Players on the same team wear identical kits, and BoT-SORT only uses appearance to choose between nearby candidates, not to re-identify players who come back into view. → **ReID is dropped**: not worth the compute and energy. Re-identifying returning players would need jersey numbers or pitch positions, which is out of scope.
+- Tracking jobs need no GPU and go through `jobs/cpu.slurm`, so they don't hold a GPU while it sits idle.
+
 ### Tracking pipeline design
 - **Detect once, track many times.** `scripts/detect.py` (GPU) stores every detection down to confidence 0.01 per sequence; `scripts/track.py` (CPU) runs any tracker configuration on stored detections or on the ground truth. Tracker settings can be explored without rerunning the detector.
 - **People and ball are tracked by separate tracker instances**, so the ball can never be matched to a person and each can use its own strategy.

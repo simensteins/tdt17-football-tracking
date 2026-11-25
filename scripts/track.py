@@ -33,6 +33,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("root", type=Path, help="tracking-2023 folder")
     parser.add_argument("--split", choices=SPLITS, required=True)
+    parser.add_argument("--sequences", nargs="*", help="only these sequences (default: whole split)")
     parser.add_argument("--detections", required=True, help="'gt', or a folder of <sequence>.txt detection files")
     parser.add_argument("--tracker", default="bytetrack.yaml", help="Ultralytics tracker config")
     parser.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="tracker config overrides")
@@ -46,7 +47,8 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_tracker_config(args.tracker, dict(s.split("=", 1) for s in args.set))
-    sequences = [s for s in find_sequences(args.root) if s.game_id in SPLITS[args.split]]
+    sequences = [s for s in find_sequences(args.root) if s.game_id in SPLITS[args.split]
+                 and (not args.sequences or s.name in args.sequences)]
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "config.txt").write_text(
         f"tracker: {args.tracker}\noverrides: {' '.join(args.set)}\ndetections: {args.detections}\n"

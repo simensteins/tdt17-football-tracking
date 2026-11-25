@@ -116,12 +116,14 @@ def main() -> None:
     parser.add_argument("root", type=Path, help="tracking-2023 folder")
     parser.add_argument("trackers", type=Path, nargs="+", help="tracker output folders")
     parser.add_argument("--split", choices=SPLITS, required=True)
+    parser.add_argument("--sequences", nargs="*", help="only these sequences (default: whole split)")
     parser.add_argument("--subsets", nargs="+", choices=SUBSETS, default=list(SUBSETS))
     parser.add_argument("--by-action", action="store_true", help="also report HOTA per clip type")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
 
-    sequences = [s for s in find_sequences(args.root) if s.game_id in SPLITS[args.split]]
+    sequences = [s for s in find_sequences(args.root) if s.game_id in SPLITS[args.split]
+                 and (not args.sequences or s.name in args.sequences)]
     action = {s.name: s.action for s in sequences}
     rows = []
     summary = {}
