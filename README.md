@@ -64,6 +64,32 @@ python scripts/eval_tracking.py data/tracking-2023 <tracks dir> [<tracks dir> ..
 
 `--detections gt` uses the ground-truth boxes without IDs, i.e. a perfect detector.
 
+Tracks of a player who left the picture and came back can be joined by jersey number (Florence-2 OCR, then linking by role, team and number):
+
+```bash
+python scripts/read_jerseys.py data/tracking-2023 <tracks dir> --split val --out <tracks dir>/jerseys.csv
+python scripts/link_tracks.py data/tracking-2023 <tracks dir> <tracks dir>/jerseys.csv --split val --out <linked tracks dir>
+```
+
+## Extra models and data
+
+RF-DETR and Florence-2 need newer libraries than Ultralytics, so they run in a second environment:
+
+```bash
+python -m venv ~/venvs/rfdetr && source ~/venvs/rfdetr/bin/activate
+pip install torch==2.14.1 torchvision --index-url https://download.pytorch.org/whl/cu126
+pip install "rfdetr[train,loggers]==1.12.1" opencv-python-headless pandas pyyaml
+python scripts/train_rfdetr.py /cluster/work/$USER/yolo/stride5 --size medium --resolution 1280 --out <run dir>
+```
+
+`scripts/detect.py` runs an RF-DETR checkpoint (`.pth`) the same way as a YOLO model.
+
+Extra training matches come from the `valid` split of [SoccerNet-GSR](https://huggingface.co/datasets/SoccerNet/SN-GSR-2025) (games 2, 3 and 5, not in the course data):
+
+```bash
+python scripts/make_gsr_dataset.py <path to valid.zip> --out /cluster/work/$USER/yolo/gsr-stride5
+```
+
 ## Repository layout
 
 | Path | Contents |

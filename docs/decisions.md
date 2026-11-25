@@ -87,6 +87,7 @@ Detection and tracking both get full experiments, not detection with a light tra
 
 ### Model generation and hardware
 - **YOLO26** (Ultralytics 8.4.218) is the main detector family. It is the newest generation, predicts boxes end-to-end without NMS, and targets small objects, which matters for the ball. YOLO11 is also available if a comparison is needed.
+- **Prior experience:** I worked with both YOLO and RT-DETR in my master's thesis. That is why I could pick and set up both families quickly: a YOLO detector as the main pipeline, and a DETR-style transformer detector (RF-DETR, a successor of RT-DETR built on a DINOv2 backbone) as the comparison.
 - **Jobs run on any A100, H100 or H200** (`--constraint=a100|h100|h200` in `jobs/gpu.slurm`). The first plan was A100 only, so that training times and energy would be comparable. But waiting for one GPU type cost more time than the comparison was worth, with three days left. IDUN also has P100 and V100, which are left out: they have at most 32 GB and are several times slower, and a 1280 training run would risk the 12-hour limit.
   - Accuracy (mAP, HOTA) doesn't depend on the GPU, so results stay comparable.
   - Time and energy do. Each job logs its GPU name and power draw, and training cost is reported per GPU type.
@@ -208,12 +209,77 @@ Validation mAP@50:95 per epoch: 0.388 0.389 0.377.
 - **Five times the frames gives no gain** for the same compute: consecutive frames at 25 fps are near-identical, so seeing different frames is worth no more than seeing the same frames again. This settles the frame-redundancy question from the data analysis.
 - **Sustainability:** training on every 5th frame costs nothing in accuracy and needs a fifth of the images to store, read and decode. The diversity that matters is across matches (kits, stadiums, referees), not across frames.
 
+**Frame stride curve** (same recipe and the same number of training steps; validation only after the last epoch, so all runs are compared on their last epoch; datasets built with `make_yolo_dataset.py --stride`):
+
+| Stride | Training frames | Epochs | mAP@50:95 (last epoch) | Goalkeeper | Ball mAP@50 | Time (A100 40 GB) |
+|---|---|---|---|---|---|---|
+| 1 (D4) | 28,500 | 3 | 0.377 | 0.193 | 0.487 | 26 min |
+| 5 (D2c) | 5,700 | 15 | 0.397 | 0.251 | 0.459 | 27 min |
+| **10** | **2,850** | **30** | **0.406** | **0.274** | **0.495** | 22 min |
+| 25 | 1,140 | 75 | 0.352 | 0.165 | 0.442 | 23 min |
+
+- **Strides 5 and 10 are equally good** (within the ±0.01 epoch noise), stride 1 is slightly worse, and stride 25 is clearly worse: 1,140 frames seen 75 times overfit.
+- **A tenth of the footage is enough** for the best detector at this compute. Data volume beyond a few thousand frames from the same matches buys nothing, which supports adding matches (GSR) rather than frames.
+
 ### D2e: two-stage fine-tuning (D2c, then all layers trainable)
 Continued from D2c's last epoch with the backbone unfrozen, learning rate 0.00002 (10× lower), 4 epochs, no warmup.
 
 Validation mAP@50:95 per epoch: **0.412** 0.405 0.392 0.398 (D2c: 0.401). Goalkeeper 0.282, ball mAP@50 0.475 at the best epoch. 9 min on an A100.
 
 - **The first unfrozen epoch is slightly better (+0.011), then the model overfits again**, even at this small learning rate. The gain is within D2c's epoch-to-epoch spread (0.380–0.401), and the final detector has no validation match left to pick that one epoch. → **Not used.** The detector experiments end here: larger model (D3), higher resolution (D2d), more frames (D4) and unfreezing (D2e) all land within ±0.012 of D2c. With two or three training matches, the data, not the model or the recipe, is the limit.
+
+### D5: RF-DETR (DINOv2 backbone) instead of YOLO
+**Why:** every YOLO variant landed within ±0.012 mAP of D2c, which points at the data (two training matches) as the limit. RF-DETR's DINOv2 backbone was pretrained on far more varied images than YOLO's COCO weights, and RF-DETR is built for transfer to new domains with little data. If better pretraining helps, unseen kits (goalkeepers, game 11's referee) should benefit most.
+
+**Setup:** `rfdetr` 1.12.1 in its own environment (`~/venvs/rfdetr`, same PyTorch 2.14.1 + CUDA 12.6 build), RF-DETR-M (35.3 M parameters), trained on the same YOLO-format dataset (games 4 and 9, every 5th frame) with `scripts/train_rfdetr.py`.
+- Input 1280 × 1280: RF-DETR squashes frames to a square without keeping the aspect ratio, so a 16 px ball becomes about 11 × 19 px.
+- Its default scale jitter crops frames to 384–600 px first, which would shrink the ball to 2–3 px, so it is turned off.
+- Constant learning rate 1e-4 (encoder 1.5e-4), EMA weights, effective batch 16.
+
+**First epoch (measuring run, batch 2, A100 40 GB, 6.5 min per epoch, 8.4 GB GPU memory):**
+
+| Validation match | mAP@50:95 | Player | Goalkeeper | Referee | Ball | Ball recall |
+|---|---|---|---|---|---|---|
+| YOLO26m D2c (15 epochs) | 0.401 | 0.614 | 0.251 | 0.581 | 0.159 | 0.48 |
+| RF-DETR-M (1 epoch) | **0.431** | 0.588 | **0.406** | 0.549 | **0.179** | **0.53** |
+
+- **After one epoch RF-DETR is ahead overall, and far ahead on goalkeepers** (AP 0.41 against 0.25), as the pretraining hypothesis predicts.
+- Caveat: RF-DETR and Ultralytics compute mAP with different code, so the numbers are close but not identical in definition. The deciding comparison is tracking HOTA on validation with the same tracker.
+
+**Tracking with the one-epoch model** (validation; BoT-SORT + GMC, merge 0.7, ball path, gaps ≤ 10 filled). Detection on the 14,250 validation frames: 39.7 ms model time per frame on an A100 (batch 8), against 5.5 ms for YOLO26m. RF-DETR keeps its 300 top queries per frame, so detection files are large (about 280 boxes per frame at confidence ≥ 0.01).
+
+| Detector | Tracker thresholds | HOTA all | HOTA people | AssA people | IDSW | HOTA ball | Corners |
+|---|---|---|---|---|---|---|---|
+| YOLO26m D2c (15 epochs) | tuned for YOLO | 64.1 | 65.4 | **57.5** | **609** | 40.1 | **57.7** |
+| RF-DETR-M (1 epoch) | tuned for YOLO | 63.8 | 64.9 | 56.3 | 787 | 43.6 | 53.5 |
+| RF-DETR-M (1 epoch) | `match_thresh=0.95 new_track_thresh=0.6 track_high_thresh=0.4` | **64.3** | **65.5** | 57.2 | 650 | **43.6** | 56.6 |
+
+- **RF-DETR detects better** (DetA 73.0 against 72.1) and **finds the ball much better** (+3.5 ball HOTA), but its tracks break more often with YOLO's tracker settings. Re-tuned thresholds (found with OC-SORT on the laptop, then confirmed with BoT-SORT) close the gap on people.
+- After one epoch, the overall gain is small (+0.2) and comes from the ball. The six-epoch run decides.
+- RF-DETR costs about 7× YOLO's model time per frame, which weighs against it in the sustainability discussion unless the gain grows.
+
+### Extra data: three more matches from SoccerNet-GSR
+**Why:** every detector variant pointed at the number of training matches as the limit (two kits per match, few goalkeepers and referees; game 11's referee kit was never seen).
+
+**Is extra data allowed?** The task description does not mention extra training data. It allows open-source resources and pretrained weights, provided all external resources are acknowledged and documented (Section 1.3). Extra data is treated the same way: documented here and credited.
+
+**Source:** SoccerNet-Tracking has 200 clips from 2019 Swiss Super League matches, split into train 57, test 49, challenge 58 and 37 future clips. The course data is the 106 train and test clips from 6 matches. SoccerNet-GSR (Somers et al., CVPRW 2024; [Hugging Face SN-GSR-2025](https://huggingface.co/datasets/SoccerNet/SN-GSR-2025), GPL-3.0, no gating) re-releases all 200 clips with labels.
+- Checked before downloading, by reading only the label headers from the remote zips:
+
+  | GSR split | Labelled clips | Game IDs | Relation to course data |
+  |---|---|---|---|
+  | train | 57 | 4, 6, 9 | identical to our training clips (SNGS-060 = SNMOT-060) |
+  | **valid** | **58** | **2, 3, 5** | **three new matches** |
+  | test | 49 | 7, 8, 11 | identical to our test clips, never used for training |
+  | challenge | 0 | | images only, labels withheld |
+- Only the valid split is used (11.2 GB). `scripts/make_gsr_dataset.py` refuses any clip from our validation or test matches.
+- Labels (v1.3) cover player, goalkeeper, referee, **ball** and other, with the same box conventions as SoccerNet-Tracking. The GSR paper says the ball is ignored in its benchmark, but the files do contain ball boxes (716 in one clip), so no borrowed labels are needed.
+- Every 5th frame, `other` dropped: **8,700 frames** with 123,928 player, 12,381 referee, 5,203 goalkeeper and 8,179 ball boxes. Spot-checked visually (new stadium, sun and hard shadows, referees in dark kits).
+
+**Experiment D6:** the D2c recipe on games 4 and 9 plus GSR games 2, 3 and 5 (14,400 frames), with the same compute as D2c (6 epochs × 14,400 ≈ 15 × 5,700 images), warmup and mosaic-off phase scaled to the same share. Validation on game 6 as always. Results below when the run has finished.
+
+### D2f: strong hue augmentation
+**Why:** the failures are unseen kit colours. Ultralytics' default augmentation already uses horizontal flips, mosaic, scaling, translation and colour jitter (`hsv_h=0.015`, `hsv_s=0.7`, `hsv_v=0.4`), so mirroring was on in every run. Shifting all hues of an image together (`hsv_h=0.5`, up to half the colour wheel) turns kits into colours never seen, so the model cannot rely on "referee = yellow" and has to use the referee being dressed unlike both teams. Same recipe as D2c otherwise. Results below when the run has finished.
 
 ### Final detector: trained on all three non-test matches
 - **Settings chosen on validation:** YOLO26m at 1280, frozen backbone, AdamW at learning rate 0.0002, 8 epochs (`final-m-1280-trainval`).
@@ -286,6 +352,50 @@ HOTA as computed here ignores roles, so roles are checked separately: every grou
 - **Players and referees are labelled correctly almost always; goalkeepers are not.** Only 40 % of goalkeeper boxes are called goalkeeper; the rest become players. Two training matches show only four goalkeeper kits.
 - **Voting per track does not help overall.** Goalkeeper labels get more reliable but rarer, and tracks that switch identity between a referee and a player drag the referee down. → Not used.
 - → Training on all three non-test matches adds goalkeeper kits, which is the best available fix.
+
+### T6: newer trackers, Deep OC-SORT and TrackTrack (D2c detections, validation match 6)
+Both ship with Ultralytics 8.4 and were run with camera motion compensation, no ReID, and the same post-processing as the chosen pipeline (merge 0.7, ball path, gaps ≤ 10 filled). "Adjusted" means thresholds moved to suit our detector, which is less confident than TrackTrack's defaults assume (it starts tracks only above 0.7; our median confidence is 0.69).
+
+| Tracker | HOTA all | HOTA people | AssA people | IDSW | HOTA on corners |
+|---|---|---|---|---|---|
+| **BoT-SORT + GMC, tuned (chosen)** | 64.1 | 65.4 | 57.5 | 607 | 57.7 |
+| Deep OC-SORT + GMC, defaults | 61.0 | 62.2 | 52.2 | 884 | 54.0 |
+| Deep OC-SORT + GMC, our tuned thresholds | **64.3** | **65.6** | **57.8** | **600** | **58.6** |
+| TrackTrack, defaults (buffer 150) | 59.5 | 60.6 | 52.7 | 589 | 50.2 |
+| TrackTrack, adjusted (high 0.4, new 0.5, low 0.1, lost rebinding 0.9) | 63.1 | 64.4 | 56.0 | 614 | 56.0 |
+
+- **Neither beats the chosen tracker by a meaningful margin.** Deep OC-SORT with our thresholds is +0.15 HOTA, within noise; without them it is 3 points lower. → **BoT-SORT stays**, and the test set is not used again for this.
+- **Thresholds matter more than the tracker:** the same tuning (`fuse_score=false`, looser matching, stricter track start) lifts Deep OC-SORT by 3.2 and TrackTrack by 3.6. Trackers tuned on pedestrian benchmarks assume a confident detector; ours, fine-tuned on two matches, is not.
+- All motion-only trackers end up within about one point of each other: what remains is detection errors and players returning to the picture, which motion cannot solve.
+
+### T7: linking tracks by jersey number (validation match 6)
+**Why:** with perfect detections the tracker still makes 1,264 ID switches on the test set (AssA 78): players who leave the picture come back with a new ID, and motion cannot re-identify them. A jersey number can.
+
+**Feasibility:** on 48 random player crops (SNMOT-061, median player height 106 px), about a quarter show a readable number. Players stay in view for several seconds, so most tracks get a few readable frames.
+
+**Method:**
+- `scripts/read_jerseys.py`: for every track, up to 10 frames spread over its life (larger boxes first); the shirt below the head (15–60 % of the box height) is cropped and read with **Florence-2-large** (Microsoft, 0.77 B parameters, MIT licence, zero-shot `<OCR>`). One- and two-digit numbers are kept, with the shirt's mean CIELAB colour.
+  - A published jersey-number model fine-tuned on SoccerNet data was avoided: its training clips likely overlap our test set.
+  - Ran on IDUN CPUs (16 cores per clip, about 1 crop/s), since the GPU queue was full.
+- `scripts/link_tracks.py`:
+  - Players are split into two teams per clip by shirt colour (2-means).
+  - A track's number is trusted only when the readings agree: at least 2 identical readings and 60 % of its readings.
+  - Tracks with the same role, team and number that never overlap in time get one ID.
+
+**What Florence-2 gets wrong:** it reads clear numbers correctly (33, 7, 16, 31, 24, 62), but **"1" in 75 % of crops with any reading** (3,287 of 4,370), mostly front views and body outlines, and often drops a digit of two-digit numbers (24 → 2, 17 → 1).
+
+**Results** (BoT-SORT + GMC pipeline with ball path; link correctness checked against ground-truth identities):
+
+| Linking | Links | Correct | HOTA all | AssA people | IDF1 | IDSW |
+|---|---|---|---|---|---|---|
+| None | 0 | | 64.1 | 57.5 | 77.4 | 609 |
+| One- and two-digit numbers, ≥ 2 readings ('1' ignored for outfield players) | 15 | 12 | 64.6 | 58.4 | 78.2 | 599 |
+| **Two-digit numbers only, ≥ 2 readings** | **11** | **11** | **64.5** | **58.3** | **78.0** | **600** |
+| Two-digit numbers only, ≥ 1 reading | 13 | not checked | 64.7 | 58.5 | 78.2 | 598 |
+
+- **Linking by number works when it fires: +0.4–0.5 HOTA, and every link from a two-digit number joins the same real player.** All three wrong links came from the single digit "2", a two-digit number missing a digit.
+- → **Chosen: two-digit numbers only, read at least twice.** On unseen matches a wrong merge costs more than a missed one.
+- **Coverage is the limit:** only 136 of 672 tracks get a trusted number, and 11 links result. A reader that does not hallucinate "1" and reads both digits would find many more. This is the clearest path to further association gains.
 
 ### Ball: offline path through all candidates (`--ball path`, validation match 6)
 **Why:** on validation the true ball is among the detector's candidates (confidence ≥ 0.01) in 83 % of frames with a ball, but it is the most confident candidate in only 77 %. 16 % of true balls have confidence below 0.2 and were thrown away by the threshold. Ball motion in the training labels: median 3.6 px/frame, 90th percentile 20, 99th 50.
