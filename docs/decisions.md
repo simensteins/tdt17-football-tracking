@@ -186,6 +186,15 @@ Validation mAP@50:95 per epoch: 0.360 0.390 0.394 0.395 0.394 0.403 0.398 0.391.
 
 - **The larger model gives no gain** (0.403 against 0.401, within epoch-to-epoch noise). The limit is the training data (two matches), not model capacity. → **YOLO26m stays the detector**; YOLO26l would cost about 1.3× the compute per image for nothing. Training time barely differed, because training is limited by image loading, not by the GPU.
 
+### D2d: higher resolution, YOLO26m at 1600 (D2c recipe, 8 epochs)
+| Run | mAP@50:95 all | Goalkeeper | Ball mAP@50 | Ball mAP@50:95 | Ball recall |
+|---|---|---|---|---|---|
+| D2c at 1280 | **0.401** | **0.251** | 0.459 | 0.159 | **0.48** |
+| D2d at 1600 | 0.390 | 0.203 | **0.505** | **0.170** | 0.47 |
+
+- **1600 helps the ball's average precision a little (+0.046 mAP@50) but finds no more balls** (recall 0.47 against 0.48), and the other classes get slightly worse. At 1.56× the compute per image it is not worth it. → **1280 stays.** The jump that mattered was 640 → 1280 (ball mAP@50 0.275 → 0.437 in D2).
+- Took 19 min on an A100 80 GB (SXM, a faster card than the PCIe A100s).
+
 ### Final detector: trained on all three non-test matches
 - **Settings chosen on validation:** YOLO26m at 1280, frozen backbone, AdamW at learning rate 0.0002, 8 epochs (`final-m-1280-trainval`).
 - **Retrained on games 4, 6 and 9** (8,550 frames). Game 6 was only held out to make choices; with those made, a third match of kits, goalkeepers and stadium is worth more than a validation score. Goalkeepers should gain most.
@@ -313,6 +322,44 @@ Detections from COCO-pretrained YOLO26m at 1280, no fine-tuning (`scripts/detect
 - **The one-ball prior still helps** (ball HOTA 17.7 → 27.2), and requiring confidence ≥ 0.3 adds 3.3 more by skipping frames whose best ball candidate is a false detection. The ball is now limited by the detector (D1 ball recall 0.38).
 - **Tracking is cheap:** 290–430 frames/s on a laptop CPU, so the detector dominates the compute cost.
 - **Reference point:** SoccerMaster reports HOTA 54.6 for YOLOv8 + OC-SORT on the test set. Our zero-shot COCO baseline reaches 55.8 on validation, but the split and the class handling differ, so the numbers are not directly comparable.
+
+---
+
+## Test set: final pipeline (games 7, 8, 11; 49 clips, 36,750 frames; evaluated once)
+Final detector (YOLO26m at 1280, frozen backbone, trained on games 4, 6 and 9, last epoch) and the chosen tracker (BoT-SORT + camera motion compensation, tuned thresholds, merge 0.7, single ball ≥ 0.2, gaps ≤ 10 frames filled). Nothing was changed after seeing these numbers.
+
+| Subset | HOTA | DetA | AssA | LocA | IDF1 | MOTA | IDSW |
+|---|---|---|---|---|---|---|---|
+| **All** | **63.0** | 71.4 | 55.7 | 84.2 | 73.6 | 85.9 | 1,344 |
+| People | 64.4 | 74.0 | 56.1 | 84.7 | 74.6 | 89.9 | 1,339 |
+| Ball | 39.8 | 38.8 | 41.0 | 73.6 | 57.6 | 22.6 | 0 |
+
+| Group | Clips | HOTA all | HOTA people | HOTA ball |
+|---|---|---|---|---|
+| Game 7 | 16 | 65.3 | 66.8 | 40.4 |
+| Game 8 | 19 | 61.5 | 62.9 | 42.7 |
+| Game 11 | 14 | 62.0 | 63.5 | 34.4 |
+| Clips with camera cuts | 6 | 63.6 | 65.2 | 42.1 |
+| Clips without | 43 | 62.9 | 64.3 | 39.5 |
+
+By clip type: goals 70.6, substitutions 69.9, yellow cards 66.7 … shots on target 57.7, corners 54.7.
+
+- **The result holds on unseen matches:** 63.0 on test against 63.9 on validation.
+- **Corners stay hardest** (54.7): crowded penalty areas, where players occlude each other.
+- **Game 11, filmed from further away (players about 89 px tall against about 100 in training), has the weakest ball** (34.4).
+- **Camera cuts do no visible harm** (63.6 against 62.9): after a cut the tracker starts new tracks, which costs identity across the cut but little else.
+- **Speed:** detection ran at 82 frames/s end to end on an A100 (5.5 ms model time per frame) after decoding images in parallel, 3.3× faster than the first version. Tracking with camera motion compensation ran at 30 frames/s per CPU core, 8 clips in parallel. The whole test set took 7.5 + 3.3 min.
+
+**Roles on the test set** (`scripts/eval_roles.py`, 500,798 matched person boxes): role accuracy 96.4 %.
+
+| True role | Recall | Precision |
+|---|---|---|
+| Player | 0.999 | 0.963 |
+| Goalkeeper | 0.629 | 0.966 |
+| Referee | 0.737 | 0.989 |
+
+- **Goalkeepers are recognised far better than in validation** (recall 0.63 against 0.39 with D2c), at precision 0.97. Training on a third match helped as hoped.
+- **Referees fail in one match only:** recall 99.6 % in game 7 and 99.7 % in game 8, but **22.5 % in game 11**, where the referee wears a dark green kit in bright sun. No training match had a referee like that, so he is called a player. A clear example of what three training matches cannot cover.
 
 ---
 
