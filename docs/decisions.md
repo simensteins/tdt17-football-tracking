@@ -195,6 +195,26 @@ Validation mAP@50:95 per epoch: 0.360 0.390 0.394 0.395 0.394 0.403 0.398 0.391.
 - **1600 helps the ball's average precision a little (+0.046 mAP@50) but finds no more balls** (recall 0.47 against 0.48), and the other classes get slightly worse. At 1.56× the compute per image it is not worth it. → **1280 stays.** The jump that mattered was 640 → 1280 (ball mAP@50 0.275 → 0.437 in D2).
 - Took 19 min on an A100 80 GB (SXM, a faster card than the PCIe A100s).
 
+### D4: every frame instead of every 5th (D2c recipe, same compute)
+28,500 training frames (stride 1) for 3 epochs, against D2c's 5,700 frames (stride 5) for 15 epochs: the same number of training steps. Warmup (0.6 epochs) and the final mosaic-off phase (1 epoch) are scaled to the same share of training.
+
+| Run | Frames | Epochs | mAP@50:95 all | Goalkeeper | Ball mAP@50 | Ball recall | Time (A100 40 GB) |
+|---|---|---|---|---|---|---|---|
+| D2c | every 5th (5,700) | 15 | **0.401** | **0.251** | 0.459 | 0.48 | 27 min |
+| D4 | every frame (28,500) | 3 | 0.389 | 0.193 | **0.487** | 0.49 | 26 min |
+
+Validation mAP@50:95 per epoch: 0.388 0.389 0.377.
+
+- **Five times the frames gives no gain** for the same compute: consecutive frames at 25 fps are near-identical, so seeing different frames is worth no more than seeing the same frames again. This settles the frame-redundancy question from the data analysis.
+- **Sustainability:** training on every 5th frame costs nothing in accuracy and needs a fifth of the images to store, read and decode. The diversity that matters is across matches (kits, stadiums, referees), not across frames.
+
+### D2e: two-stage fine-tuning (D2c, then all layers trainable)
+Continued from D2c's last epoch with the backbone unfrozen, learning rate 0.00002 (10× lower), 4 epochs, no warmup.
+
+Validation mAP@50:95 per epoch: **0.412** 0.405 0.392 0.398 (D2c: 0.401). Goalkeeper 0.282, ball mAP@50 0.475 at the best epoch. 9 min on an A100.
+
+- **The first unfrozen epoch is slightly better (+0.011), then the model overfits again**, even at this small learning rate. The gain is within D2c's epoch-to-epoch spread (0.380–0.401), and the final detector has no validation match left to pick that one epoch. → **Not used.** The detector experiments end here: larger model (D3), higher resolution (D2d), more frames (D4) and unfreezing (D2e) all land within ±0.012 of D2c. With two or three training matches, the data, not the model or the recipe, is the limit.
+
 ### Final detector: trained on all three non-test matches
 - **Settings chosen on validation:** YOLO26m at 1280, frozen backbone, AdamW at learning rate 0.0002, 8 epochs (`final-m-1280-trainval`).
 - **Retrained on games 4, 6 and 9** (8,550 frames). Game 6 was only held out to make choices; with those made, a third match of kits, goalkeepers and stadium is worth more than a validation score. Goalkeepers should gain most.
@@ -363,6 +383,25 @@ By clip type: goals 70.6, substitutions 69.9, yellow cards 66.7 … shots on tar
 - **Game 11, filmed from further away (players about 89 px tall against about 100 in training), has the weakest ball** (34.4).
 - **Camera cuts do no visible harm** (63.6 against 62.9): after a cut the tracker starts new tracks, which costs identity across the cut but little else.
 - **Speed:** detection ran at 82 frames/s end to end on an A100 (5.5 ms model time per frame) after decoding images in parallel, 3.3× faster than the first version. Tracking with camera motion compensation ran at 30 frames/s per CPU core, 8 clips in parallel. The whole test set took 7.5 + 3.3 min.
+
+**Second test run: ball path search.** After the first test run, the ball path search was developed and chosen on validation (+2.0 ball HOTA there). It changes only the ball, and reuses the final detector's test detections. This is the second and last look at the test set; both runs are reported.
+
+| Test run | HOTA all | DetA | AssA | HOTA people | HOTA ball | MOTA ball |
+|---|---|---|---|---|---|---|
+| 1: single ball ≥ 0.2 | 63.0 | 71.4 | 55.7 | 64.4 | 39.8 | 22.7 |
+| **2: ball path search** | **63.1** | **71.6** | **55.8** | 64.4 | **41.4** | **30.3** |
+
+The gain carries over to unseen matches (+1.6 ball HOTA, +7.7 ball MOTA).
+
+**Baseline and upper bound on the test set:**
+
+| Pipeline | HOTA all | HOTA people | AssA people | IDSW | HOTA ball |
+|---|---|---|---|---|---|
+| Off-the-shelf: COCO YOLO26m at 1280 + default ByteTrack | 53.4 | 55.0 | 46.4 | 3,902 | 13.7 |
+| **Ours (final pipeline, test run 2)** | **63.1** | **64.4** | **56.1** | **1,340** | **41.4** |
+| Our tracker on perfect detections | 87.7 | 87.1 | 76.7 | 1,264 | 95.7 |
+
+- **The pipeline adds 9.7 HOTA over the off-the-shelf baseline**, cuts ID switches by two thirds and triples ball HOTA. The baseline also cannot tell players, goalkeepers and referees apart.
 
 **Upper bound on the test set:** the same tracker on perfect detections (ground truth without IDs, no box merging) reaches **HOTA 87.7** (people 87.1, AssA 77.7; ball 95.7). Detection errors cost about 25 HOTA. Even with perfect boxes, association stops at AssA 78: players who leave the picture and come back get new IDs.
 
