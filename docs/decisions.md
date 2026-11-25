@@ -156,6 +156,42 @@ Trained on games 4 and 9 (5,700 frames, every 5th), 50 epochs planned with early
 - **Players and referees are learned; goalkeepers are not.** Goalkeepers wear a different kit in every match, and two training matches show only four goalkeeper kits. At 1280, goalkeeper precision is 0.195: other people are called goalkeepers.
 - **The A100 ran at 168 W of its 250 W during training at 640**, so training was held back by image loading on the CPU, not by the GPU. Full-HD JPEGs are decoded four at a time for every mosaic image.
 
+### D2b/D2c: gentler fine-tuning at 1280
+Same data, 15 epochs without early stopping, AdamW at learning rate 0.0002 (about 6× lower than D2), mosaic off for the last 5 epochs. D2c also freezes the first 10 layers (the backbone).
+
+| Run | GPU | Best epoch | mAP@50:95 all | Player | Goalkeeper | Referee | Ball mAP@50 | Ball recall | Time | GPU energy |
+|---|---|---|---|---|---|---|---|---|---|---|
+| D2 (lr 0.00125) | H100 | 1 | 0.362 | 0.580 | 0.162 | 0.548 | 0.437 | 0.33 | 18 min | 0.16 kWh |
+| D2b (lr 0.0002) | H100 | 2 | **0.407** | 0.597 | **0.311** | 0.548 | 0.452 | 0.41 | 17 min | 0.15 kWh |
+| D2c (lr 0.0002, frozen backbone) | A100 | 8 | 0.401 | **0.614** | 0.251 | **0.581** | **0.459** | **0.48** | 27 min | 0.10 kWh |
+
+Validation mAP@50:95 per epoch:
+- D2b: 0.357 0.408 0.351 0.357 0.357 0.329 0.368 0.386 0.361 0.359 0.372 0.372 0.375 0.371 0.369
+- D2c: 0.388 0.389 0.380 0.389 0.391 0.385 0.380 0.401 0.393 0.398 0.395 0.391 0.401 0.398 0.397
+
+- **The lower learning rate helps**: +0.045 mAP@50:95 over D2. But D2b still peaks at epoch 2 and swings by up to 0.08 between epochs, so its best score is partly luck in which epoch was picked.
+- **Freezing the backbone makes training stable.** D2c stays within 0.380–0.401 and keeps improving slowly. Its last epoch (0.397) is as good as its best, while D2b's last epoch (0.369) is well below its best. With two training matches, keeping the COCO features fixed stops the model from overfitting to those matches. → **D2c is the detector going forward.**
+- **Freezing is also cheaper:** about 0.10 kWh on an A100 against 0.15 kWh for D2b on an H100 (different GPUs, so only indicative).
+- Best epochs are chosen on the validation match, so validation scores are slightly optimistic. The test set, used once at the end, gives the unbiased number.
+
+### T1, continued: tracking on fine-tuned detections (D2 at 1280, best epoch 1)
+| Detections + tracker settings | HOTA all | HOTA people | DetA people | AssA people | IDSW people | HOTA ball |
+|---|---|---|---|---|---|---|
+| COCO, OC-SORT (150) + single ball ≥ 0.3 | 56.1 | 57.3 | 67.3 | 49.0 | 1,221 | 30.5 |
+| D2, same settings | 47.5 | 48.6 | 65.9 | 36.0 | 2,926 | 21.6 |
+| D2, + merge duplicate people boxes | 52.3 | 53.4 | 68.4 | 41.8 | 1,740 | 34.8* |
+| COCO, OC-SORT without score fusion | 57.4 | 58.6 | 66.1 | 52.2 | 1,007 | 30.5 |
+| **D2, merge + OC-SORT without score fusion** | **59.8** | **61.3** | **71.9** | **52.4** | 1,135 | **34.8*** |
+
+\* single ball without a confidence threshold. The fine-tuned model is less confident, and a 0.3 threshold drops ball HOTA to 21.6, so the threshold depends on the detector.
+
+- **The fine-tuned model first tracked worse than the COCO model**, with more than twice the ID switches. Two causes were found:
+  - **Duplicate boxes.** YOLO26 has no NMS step and picks boxes per class, so the same person often comes out as both player and goalkeeper (2.1 duplicate pairs per frame on SNMOT-097, against 0 for the one-class COCO model). Each copy starts its own track. → `scripts/track.py --merge-iou 0.7` keeps the most confident of people boxes overlapping by more than IoU 0.7. People HOTA +4.8.
+  - **Score fusion.** Ultralytics trackers multiply the match score by the detection confidence (`fuse_score`). The fine-tuned model is less confident (median 0.69 against 0.85), so good matches fall below the matching threshold and tracks break. → `--set fuse_score=false`. People HOTA +7.9, ID switches −35 %. It also helps the COCO detections (+1.3).
+- **With both fixes, fine-tuning pays off:** people HOTA 61.3 against 58.6, and DetA 71.9 against 66.1, mostly from fewer false people (MOTA 89.9 against 78.8). Association quality is equal (AssA 52), as expected, since the tracker is the same.
+- Low-score matching (`use_byte=true`) adds only 0.8, so it stays off.
+- These detections come from D2's epoch-1 checkpoint, which has barely learned the SoccerNet box style (LocA still 83). D2c should do better.
+
 ### Tracking pipeline design
 - **Detect once, track many times.** `scripts/detect.py` (GPU) stores every detection down to confidence 0.01 per sequence; `scripts/track.py` (CPU) runs any tracker configuration on stored detections or on the ground truth. Tracker settings can be explored without rerunning the detector.
 - **People and ball are tracked by separate tracker instances**, so the ball can never be matched to a person and each can use its own strategy.

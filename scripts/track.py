@@ -25,7 +25,8 @@ from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from football.data import SPLITS, find_sequences  # noqa: E402
-from football.tracking import gt_detections, load_tracker_config, read_mot, track_sequence, write_mot  # noqa: E402
+from football.tracking import (gt_detections, load_tracker_config, merge_people, read_mot,  # noqa: E402
+                               track_sequence, write_mot)
 
 
 def main() -> None:
@@ -39,6 +40,8 @@ def main() -> None:
     parser.add_argument("--ball", choices=("tracker", "single"), default="tracker",
                         help="track the ball with the tracker, or keep the best ball detection per frame under one ID")
     parser.add_argument("--ball-conf", type=float, default=0.0, help="minimum confidence for --ball single")
+    parser.add_argument("--merge-iou", type=float,
+                        help="merge people boxes of different classes overlapping by more than this IoU")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
 
@@ -47,13 +50,15 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "config.txt").write_text(
         f"tracker: {args.tracker}\noverrides: {' '.join(args.set)}\ndetections: {args.detections}\n"
-        f"ball: {args.ball} (min conf {args.ball_conf})\n"
+        f"ball: {args.ball} (min conf {args.ball_conf})\nmerge people above IoU: {args.merge_iou}\n"
         + "".join(f"{k}: {v}\n" for k, v in vars(cfg).items()))
 
     start = time.time()
     frames = 0
     for seq in sequences:
         dets = gt_detections(seq) if args.detections == "gt" else read_mot(Path(args.detections) / f"{seq.name}.txt")
+        if args.merge_iou is not None:
+            dets = merge_people(dets, args.merge_iou)
         tracks = track_sequence(seq, dets, cfg, read_images=args.images, ball=args.ball, ball_conf=args.ball_conf)
         write_mot(tracks, args.out / f"{seq.name}.txt")
         frames += seq.length

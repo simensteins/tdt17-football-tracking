@@ -71,6 +71,25 @@ def _boxes(rows: pd.DataFrame, shape: tuple[int, int]):
     return Boxes(data.reshape(-1, 6), shape)
 
 
+def merge_people(detections: pd.DataFrame, iou: float) -> pd.DataFrame:
+    """Class-agnostic NMS on people boxes.
+
+    YOLO26 has no NMS step and picks boxes per class, so one person can come
+    out as both a player and a goalkeeper. Each copy would start its own track.
+    Keeps the most confident box, and its class, among people boxes overlapping
+    by more than `iou`.
+    """
+    import torch
+    from torchvision.ops import batched_nms
+
+    people = detections[detections["cls"] != BALL]
+    boxes = torch.tensor(np.column_stack([people["x"], people["y"], people["x"] + people["w"],
+                                          people["y"] + people["h"]]), dtype=torch.float32)
+    keep = batched_nms(boxes, torch.tensor(people["conf"].to_numpy(), dtype=torch.float32),
+                       torch.tensor(people["frame"].to_numpy()), iou).numpy()
+    return pd.concat([people.iloc[np.sort(keep)], detections[detections["cls"] == BALL]]).sort_values("frame", kind="stable")
+
+
 def single_ball(detections: pd.DataFrame, min_conf: float = 0.0) -> pd.DataFrame:
     """Ball 'tracking' using the prior that there is one ball.
 

@@ -57,7 +57,7 @@ Detect once on a GPU, then track and evaluate on CPU:
 ```bash
 python scripts/detect.py data/tracking-2023 --split val --model <weights.pt> --imgsz 1280 --out <detections dir>
 python scripts/track.py data/tracking-2023 --split val --detections <detections dir or 'gt'> \
-    --tracker ocsort.yaml --set track_buffer=150 --ball single --out <tracks dir>
+    --tracker ocsort.yaml --set track_buffer=150 fuse_score=false --merge-iou 0.7 --ball single --out <tracks dir>
 python scripts/eval_tracking.py data/tracking-2023 <tracks dir> [<tracks dir> ...] --split val --by-action
 ```
 
