@@ -103,6 +103,30 @@ def single_ball(detections: pd.DataFrame, min_conf: float = 0.0) -> pd.DataFrame
     return best[DET_COLUMNS]
 
 
+def interpolate(tracks: pd.DataFrame, max_gap: int) -> pd.DataFrame:
+    """Fill gaps of up to `max_gap` frames inside each track by linear interpolation.
+
+    Offline post-processing: a box missing for a few frames (missed detection,
+    brief occlusion) is drawn between the last box before and the first box
+    after the gap. Filled boxes get the lower confidence of the two ends.
+    """
+    filled = []
+    for _, track in tracks.groupby("id"):
+        track = track.sort_values("frame")
+        frames = track["frame"].to_numpy()
+        for i in np.flatnonzero((np.diff(frames) > 1) & (np.diff(frames) <= max_gap + 1)):
+            a, b = track.iloc[i], track.iloc[i + 1]
+            missing = np.arange(a["frame"] + 1, b["frame"])
+            t = (missing - a["frame"]) / (b["frame"] - a["frame"])
+            box = {k: a[k] + t * (b[k] - a[k]) for k in ("x", "y", "w", "h")}
+            filled.append(pd.DataFrame({"frame": missing, "id": a["id"], **box,
+                                        "conf": min(a["conf"], b["conf"]), "cls": a["cls"]}))
+    if not filled:
+        return tracks
+    return pd.concat([tracks, *filled], ignore_index=True).astype({"frame": int, "id": int, "cls": int}) \
+        .sort_values(["frame", "id"], ignore_index=True)
+
+
 def track_sequence(seq: Sequence, detections: pd.DataFrame, cfg, read_images: bool = False,
                    ball: str = "tracker", ball_conf: float = 0.0) -> pd.DataFrame:
     """Track people with the given tracker; the ball with it too, or with single_ball()."""

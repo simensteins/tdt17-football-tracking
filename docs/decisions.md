@@ -91,7 +91,7 @@ Detection and tracking both get full experiments, not detection with a light tra
   - Accuracy (mAP, HOTA) doesn't depend on the GPU, so results stay comparable.
   - Time and energy do. Each job logs its GPU name and power draw, and training cost is reported per GPU type.
   - Inference speed is measured on one GPU type for all models, so speed comparisons stay fair.
-- **Time limits come from measured runtimes plus about 25 %.** The 12-hour D2 jobs waited in the queue (reason `Priority`, estimated start after the deadline), while 1-hour jobs started at once: Slurm only fits low-priority jobs into gaps they fit in, so a generous limit means hours of waiting. Unknown runtimes are measured with a short job first.
+- **GPU job time limits come from measured runtimes plus about 25 %.** The 12-hour D2 jobs waited in the queue (reason `Priority`, estimated start after the deadline), while 1-hour jobs started at once: Slurm only fits low-priority jobs into gaps they fit in, so a generous limit means hours of waiting. Unknown runtimes are measured with a short job first. CPU jobs start at once anyway, so they get more room: a tracking job sized at 8 min + 25 % landed on a slower node and timed out one clip before the end.
 - **No chained resume jobs.** D2 was given follow-up jobs (`yolo detect train resume`) in case it hit its limit. It finished early, and the follow-ups did not stop but trained a new model on Ultralytics' built-in 4-image demo dataset for 100 epochs (about 3 minutes each, wasted). Runs are now sized to finish within one job.
 
 ### Experiment plan
@@ -174,6 +174,24 @@ Validation mAP@50:95 per epoch:
 - **Freezing is also cheaper:** about 0.10 kWh on an A100 against 0.15 kWh for D2b on an H100 (different GPUs, so only indicative).
 - Best epochs are chosen on the validation match, so validation scores are slightly optimistic. The test set, used once at the end, gives the unbiased number.
 
+### D3: larger model, YOLO26l at 1280 (D2c recipe, 8 epochs)
+Halved to 8 epochs: D2c reached its best at epoch 8 and gained nothing after, and shorter jobs start sooner in the queue.
+
+| Run | GPU | mAP@50:95 all | Player | Goalkeeper | Referee | Ball mAP@50 | Ball recall | Time |
+|---|---|---|---|---|---|---|---|---|
+| D2c, YOLO26m (15 epochs) | A100 40 GB | 0.401 | 0.614 | 0.251 | 0.581 | 0.459 | 0.48 | 27 min |
+| D3, YOLO26l (8 epochs) | A100 80 GB | 0.403 | 0.608 | 0.259 | 0.576 | 0.463 | 0.45 | 16 min |
+
+Validation mAP@50:95 per epoch: 0.360 0.390 0.394 0.395 0.394 0.403 0.398 0.391.
+
+- **The larger model gives no gain** (0.403 against 0.401, within epoch-to-epoch noise). The limit is the training data (two matches), not model capacity. → **YOLO26m stays the detector**; YOLO26l would cost about 1.3× the compute per image for nothing. Training time barely differed, because training is limited by image loading, not by the GPU.
+
+### Final detector: trained on all three non-test matches
+- **Settings chosen on validation:** YOLO26m at 1280, frozen backbone, AdamW at learning rate 0.0002, 8 epochs (`final-m-1280-trainval`).
+- **Retrained on games 4, 6 and 9** (8,550 frames). Game 6 was only held out to make choices; with those made, a third match of kits, goalkeepers and stadium is worth more than a validation score. Goalkeepers should gain most.
+- **The last epoch is used, not the "best" one.** Validation is now part of training, so picking an epoch by its validation score would be meaningless. D2c showed the last epoch is as good as the best with this recipe.
+- **The test set (games 7, 8, 11) is used once**, with the final detector and the tracker settings chosen on validation.
+
 ### T1, continued: tracking on fine-tuned detections (D2 at 1280, best epoch 1)
 | Detections + tracker settings | HOTA all | HOTA people | DetA people | AssA people | IDSW people | HOTA ball |
 |---|---|---|---|---|---|---|
@@ -191,6 +209,54 @@ Validation mAP@50:95 per epoch:
 - **With both fixes, fine-tuning pays off:** people HOTA 61.3 against 58.6, and DetA 71.9 against 66.1, mostly from fewer false people (MOTA 89.9 against 78.8). Association quality is equal (AssA 52), as expected, since the tracker is the same.
 - Low-score matching (`use_byte=true`) adds only 0.8, so it stays off.
 - These detections come from D2's epoch-1 checkpoint, which has barely learned the SoccerNet box style (LocA still 83). D2c should do better.
+- **With D2c detections** (frozen backbone, same tracker settings): HOTA all **62.8**, people **64.5** (DetA 74.2, AssA 56.2, 977 ID switches), ball 35.8. +3.0 over D2 on all classes. A ball threshold of 0.2 raises ball HOTA to 37.8 and HOTA all to **63.1**. ByteTrack with the same settings is 0.7 lower than OC-SORT.
+
+### Tracker tuning and gap interpolation (OC-SORT on D2c detections, validation match 6)
+One setting changed at a time from the base (`track_buffer=150 fuse_score=false`, merge 0.7, single ball ≥ 0.2), then the best combined.
+
+| Setting | HOTA all | HOTA people | AssA people | IDSW people |
+|---|---|---|---|---|
+| Base | 63.1 | 64.5 | 56.2 | 977 |
+| `match_thresh` 0.6 / 0.7 / **0.9** (default 0.8) | 61.7 / 62.4 / **63.4** | 62.1 / 63.7 / **64.7** | | 1,780 / 1,181 / 880 |
+| `new_track_thresh` 0.4 / 0.5 (default 0.25) | 63.2 / 63.2 | 64.5 / 64.6 | 57.0 | 809 / 756 |
+| `track_high_thresh` 0.15 / 0.4 / 0.5 (default 0.25) | | 62.5 / 58.5 / 52.8 | | |
+| `track_buffer` 60 / 300 | 63.3 / | 64.7 / 64.1 | | |
+| `match_thresh=0.9 new_track_thresh=0.5` | 63.3 | 64.7 | 57.1 | 728 |
+| **+ interpolate gaps ≤ 10 frames** | **63.6** | **65.1** | **57.3** | **629** |
+| + interpolate gaps ≤ 25 / 50 frames | 63.5 / 63.1 | 65.0 / 64.7 | | |
+
+- **The tracker is close to saturated:** the best combination adds 0.5 HOTA. It does cut ID switches by 36 % (977 → 629), which matters for post-match statistics per player.
+- A looser match threshold (0.9, i.e. IoU ≥ 0.1) keeps tracks through fast camera pans; a stricter one breaks them.
+- A higher threshold for starting new tracks (0.5) avoids short false tracks from weak detections.
+- **Filling short gaps** offline (`--interpolate 10`) adds a little. Longer gaps get worse: across 2 s a player does not move in a straight line, and the ball even less.
+- Remaining gains have to come from the detector (DetA 74, LocA 84) and from re-identifying players who come back into view (AssA 57).
+- **Best OC-SORT settings:** `track_buffer=150 fuse_score=false match_thresh=0.9 new_track_thresh=0.5`, `--merge-iou 0.7 --ball single --ball-conf 0.2 --interpolate 10`.
+
+### T2: BoT-SORT with camera motion compensation on D2c detections (validation match 6, run on IDUN)
+Same detections and options as above (`fuse_score=false`, merge 0.7, single ball ≥ 0.2); sparse optical flow for camera motion.
+
+| Tracker | HOTA all | HOTA people | AssA people | IDSW people | HOTA on corners |
+|---|---|---|---|---|---|
+| OC-SORT, tuned, + interpolation | 63.6 | 65.1 | 57.3 | 629 | 55.4 |
+| BoT-SORT + GMC, default thresholds | 63.7 | 65.1 | 56.7 | 778 | 57.3 |
+| BoT-SORT + GMC, `match_thresh=0.9 new_track_thresh=0.5` | 63.8 | 65.2 | 57.4 | 658 | 57.3 |
+| **BoT-SORT + GMC, same + interpolation ≤ 10 frames** | **63.9** | **65.4** | **57.5** | **607** | **57.5** |
+
+- **Camera motion compensation helps most where the camera moves most:** +2.1 HOTA on corners, +0.3 overall. The same tuned thresholds help BoT-SORT too.
+- **Cost:** it needs the frames, and tracking drops from about 300 to about 30 frames/s on one CPU core. That is still faster than real time (25 frames/s) and about as fast as detection, so for post-match analysis it is affordable.
+- **Chosen tracker settings:** BoT-SORT + GMC, `track_buffer=150 fuse_score=false match_thresh=0.9 new_track_thresh=0.5`, `--merge-iou 0.7 --ball single --ball-conf 0.2 --images --interpolate 10`. Tuned on validation only; the test set is not used for any choice.
+
+### Roles in the tracks (chosen OC-SORT settings, D2c detections)
+HOTA as computed here ignores roles, so roles are checked separately: every ground-truth person box is matched to the track box with the highest IoU (> 0.5) in the same frame, and the roles are compared.
+
+| Roles from | Role accuracy | Goalkeeper recall | Goalkeeper precision | Referee recall |
+|---|---|---|---|---|
+| Each box's own class | **96.8 %** | **0.40** | 0.67 | **0.99** |
+| Majority vote per track (confidence-weighted) | 96.4 % | 0.29 | **0.90** | 0.94 |
+
+- **Players and referees are labelled correctly almost always; goalkeepers are not.** Only 40 % of goalkeeper boxes are called goalkeeper; the rest become players. Two training matches show only four goalkeeper kits.
+- **Voting per track does not help overall.** Goalkeeper labels get more reliable but rarer, and tracks that switch identity between a referee and a player drag the referee down. → Not used.
+- → Training on all three non-test matches adds goalkeeper kits, which is the best available fix.
 
 ### T2/T4 first check: camera motion compensation and appearance ReID (SNMOT-060, perfect detections)
 One training clip with images on the laptop, so this is a quick check only, before spending cluster time.
