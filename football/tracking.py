@@ -127,9 +127,73 @@ def interpolate(tracks: pd.DataFrame, max_gap: int) -> pd.DataFrame:
         .sort_values(["frame", "id"], ignore_index=True)
 
 
+def ball_path(detections: pd.DataFrame, tau: float = 0.2, top_k: int = 10, max_gap: int = 12,
+              free_speed: float = 20.0, speed_scale: float = 15.0, gap_cost: float = 0.3,
+              restart_cost: float = 3.0) -> pd.DataFrame:
+    """Offline ball 'tracking': the most plausible ball path through all candidates.
+
+    Uses past and future frames, so it fits post-match analysis. Picks at most
+    one ball candidate per frame, maximising
+        sum over chosen candidates of log(conf / tau)
+        - sum over links of ((speed - free_speed) / speed_scale)^2 for speeds above free_speed
+        - gap_cost per skipped frame inside a segment
+        - restart_cost per new segment (the ball left the picture, or was lost).
+    A candidate weaker than tau can still be chosen when it continues a
+    plausible path; a confident outlier far from the path can be skipped.
+    Solved exactly by dynamic programming over candidates in frame order.
+    Speeds are in pixels per frame (median ball speed 3.6, 90th percentile 20).
+    """
+    top_k, max_gap = int(top_k), int(max_gap)
+    balls = detections[detections["cls"] == BALL]
+    balls = balls.sort_values(["frame", "conf"], ascending=[True, False]).groupby("frame").head(top_k)
+    if balls.empty:
+        return balls[DET_COLUMNS]
+    frames = balls["frame"].to_numpy()
+    centres = np.column_stack([balls["x"] + balls["w"] / 2, balls["y"] + balls["h"] / 2])
+    reward = np.log(np.maximum(balls["conf"].to_numpy(), 1e-6) / tau)
+
+    n = len(balls)
+    best = np.empty(n)
+    back = np.full(n, -1)  # previous candidate in the path, or -1 at the start of the path
+    # Best path ending in any earlier frame, from which a new segment can start.
+    best_so_far, best_so_far_idx = 0.0, -1  # the empty path
+    done = 0  # candidates before this index belong to finished frames
+    order_start = np.searchsorted(frames, frames, side="left")
+    for i in range(n):
+        f = frames[i]
+        if i == order_start[i]:  # first candidate of a new frame
+            for j in range(done, i):
+                if best[j] > best_so_far:
+                    best_so_far, best_so_far_idx = best[j], j
+            done = i
+        score, prev = best_so_far - restart_cost, best_so_far_idx
+        lo = np.searchsorted(frames, f - max_gap, side="left")
+        hi = order_start[i]
+        if hi > lo:
+            k = f - frames[lo:hi]
+            speed = np.linalg.norm(centres[lo:hi] - centres[i], axis=1) / k
+            link = best[lo:hi] - (np.maximum(speed - free_speed, 0) / speed_scale) ** 2 - gap_cost * (k - 1)
+            j = int(np.argmax(link))
+            if link[j] > score:
+                score, prev = link[j], lo + j
+        best[i] = reward[i] + score
+        back[i] = prev
+
+    end = int(np.argmax(best))
+    if best[end] <= 0:
+        return balls.iloc[:0][DET_COLUMNS]
+    chosen = []
+    while end >= 0:
+        chosen.append(end)
+        end = back[end]
+    path = balls.iloc[sorted(chosen)].copy()
+    path["id"] = BALL_ID_OFFSET + 1
+    return path[DET_COLUMNS]
+
+
 def track_sequence(seq: Sequence, detections: pd.DataFrame, cfg, read_images: bool = False,
-                   ball: str = "tracker", ball_conf: float = 0.0) -> pd.DataFrame:
-    """Track people with the given tracker; the ball with it too, or with single_ball()."""
+                   ball: str = "tracker", ball_conf: float = 0.0, ball_args: dict | None = None) -> pd.DataFrame:
+    """Track people with the given tracker; the ball with it too, or with single_ball() or ball_path()."""
     import cv2
 
     width, height = seq.size
@@ -158,6 +222,8 @@ def track_sequence(seq: Sequence, detections: pd.DataFrame, cfg, read_images: bo
                                      "cls": matched["cls"].to_numpy().astype(int)}))
     if ball == "single":
         out.append(single_ball(detections, ball_conf))
+    elif ball == "path":
+        out.append(ball_path(detections, **(ball_args or {})))
     out = [o for o in out if len(o)]
     if not out:
         return pd.DataFrame(columns=DET_COLUMNS)

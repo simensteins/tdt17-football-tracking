@@ -38,8 +38,11 @@ def main() -> None:
     parser.add_argument("--tracker", default="bytetrack.yaml", help="Ultralytics tracker config")
     parser.add_argument("--set", nargs="*", default=[], metavar="KEY=VALUE", help="tracker config overrides")
     parser.add_argument("--images", action="store_true", help="read frames (needed for camera motion compensation and ReID)")
-    parser.add_argument("--ball", choices=("tracker", "single"), default="tracker",
-                        help="track the ball with the tracker, or keep the best ball detection per frame under one ID")
+    parser.add_argument("--ball", choices=("tracker", "single", "path"), default="tracker",
+                        help="ball with the tracker; the best detection per frame ('single'); "
+                             "or the most plausible path through all candidates ('path', offline)")
+    parser.add_argument("--ball-path", nargs="*", default=[], metavar="KEY=VALUE",
+                        help="options for --ball path, e.g. tau=0.2 restart_cost=3")
     parser.add_argument("--ball-conf", type=float, default=0.0, help="minimum confidence for --ball single")
     parser.add_argument("--merge-iou", type=float,
                         help="merge people boxes of different classes overlapping by more than this IoU")
@@ -54,7 +57,7 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "config.txt").write_text(
         f"tracker: {args.tracker}\noverrides: {' '.join(args.set)}\ndetections: {args.detections}\n"
-        f"ball: {args.ball} (min conf {args.ball_conf})\nmerge people above IoU: {args.merge_iou}\n"
+        f"ball: {args.ball} (min conf {args.ball_conf}; path options {' '.join(args.ball_path)})\nmerge people above IoU: {args.merge_iou}\n"
         f"interpolate gaps up to: {args.interpolate} frames\n"
         + "".join(f"{k}: {v}\n" for k, v in vars(cfg).items()))
 
@@ -64,7 +67,8 @@ def main() -> None:
         dets = gt_detections(seq) if args.detections == "gt" else read_mot(Path(args.detections) / f"{seq.name}.txt")
         if args.merge_iou is not None:
             dets = merge_people(dets, args.merge_iou)
-        tracks = track_sequence(seq, dets, cfg, read_images=args.images, ball=args.ball, ball_conf=args.ball_conf)
+        tracks = track_sequence(seq, dets, cfg, read_images=args.images, ball=args.ball, ball_conf=args.ball_conf,
+                                ball_args={k: float(v) for k, v in (o.split("=", 1) for o in args.ball_path)})
         if args.interpolate:
             tracks = interpolate(tracks, args.interpolate)
         write_mot(tracks, args.out / f"{seq.name}.txt")

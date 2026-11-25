@@ -253,7 +253,7 @@ Same detections and options as above (`fuse_score=false`, merge 0.7, single ball
 
 - **Camera motion compensation helps most where the camera moves most:** +2.1 HOTA on corners, +0.3 overall. The same tuned thresholds help BoT-SORT too.
 - **Cost:** it needs the frames, and tracking drops from about 300 to about 30 frames/s on one CPU core. That is still faster than real time (25 frames/s) and about as fast as detection, so for post-match analysis it is affordable.
-- **Chosen tracker settings:** BoT-SORT + GMC, `track_buffer=150 fuse_score=false match_thresh=0.9 new_track_thresh=0.5`, `--merge-iou 0.7 --ball single --ball-conf 0.2 --images --interpolate 10`. Tuned on validation only; the test set is not used for any choice.
+- **Chosen tracker settings:** BoT-SORT + GMC, `track_buffer=150 fuse_score=false match_thresh=0.9 new_track_thresh=0.5`, `--merge-iou 0.7 --ball single --ball-conf 0.2 --images --interpolate 10`. Updated after the first test run: the ball uses `--ball path` instead of `--ball single --ball-conf 0.2` (see the ball path section). Tuned on validation only; the test set is not used for any choice.
 
 ### Roles in the tracks (chosen OC-SORT settings, D2c detections)
 HOTA as computed here ignores roles, so roles are checked separately: every ground-truth person box is matched to the track box with the highest IoU (> 0.5) in the same frame, and the roles are compared.
@@ -266,6 +266,20 @@ HOTA as computed here ignores roles, so roles are checked separately: every grou
 - **Players and referees are labelled correctly almost always; goalkeepers are not.** Only 40 % of goalkeeper boxes are called goalkeeper; the rest become players. Two training matches show only four goalkeeper kits.
 - **Voting per track does not help overall.** Goalkeeper labels get more reliable but rarer, and tracks that switch identity between a referee and a player drag the referee down. → Not used.
 - → Training on all three non-test matches adds goalkeeper kits, which is the best available fix.
+
+### Ball: offline path through all candidates (`--ball path`, validation match 6)
+**Why:** on validation the true ball is among the detector's candidates (confidence ≥ 0.01) in 83 % of frames with a ball, but it is the most confident candidate in only 77 %. 16 % of true balls have confidence below 0.2 and were thrown away by the threshold. Ball motion in the training labels: median 3.6 px/frame, 90th percentile 20, 99th 50.
+
+**Method:** `football.tracking.ball_path` picks at most one candidate per frame and finds the best-scoring path by dynamic programming over all frames (offline, so the future is used too). Score: log(confidence / 0.2) per chosen candidate, minus a squared penalty for speeds above 20 px/frame, minus 0.3 per skipped frame inside a segment, minus 3 for starting a new segment (the ball left the picture). A weak candidate that continues the path is kept; a confident outlier far from it is dropped.
+
+| Ball method | HOTA ball | DetA ball | AssA ball | MOTA ball | HOTA all |
+|---|---|---|---|---|---|
+| Most confident candidate ≥ 0.2 per frame | 38.1 | 37.2 | 39.2 | 24.6 | 63.9 |
+| **Path search, default settings** | **40.1** | **39.0** | **41.3** | **33.4** | **64.1** |
+| Path search, best of 9 settings tried (`gap_cost` 0.1) | 40.5 | 39.7 | 41.3 | 30.0 | 64.1 |
+
+- **+2.0 ball HOTA and +8.8 ball MOTA**, mostly from fewer false balls. The default settings are kept; the best variant is within noise.
+- **The ball is limited by the detector, not the selection.** In 17 % of frames the true ball is not among the candidates at all, and predicted boxes are on median 1.8 px off-centre and 7 % smaller than the labels (16 px wide). For a 16 px box that is enough to fail HOTA's stricter overlap thresholds (ball LocA 73).
 
 ### T2/T4 first check: camera motion compensation and appearance ReID (SNMOT-060, perfect detections)
 One training clip with images on the laptop, so this is a quick check only, before spending cluster time.
@@ -349,6 +363,8 @@ By clip type: goals 70.6, substitutions 69.9, yellow cards 66.7 … shots on tar
 - **Game 11, filmed from further away (players about 89 px tall against about 100 in training), has the weakest ball** (34.4).
 - **Camera cuts do no visible harm** (63.6 against 62.9): after a cut the tracker starts new tracks, which costs identity across the cut but little else.
 - **Speed:** detection ran at 82 frames/s end to end on an A100 (5.5 ms model time per frame) after decoding images in parallel, 3.3× faster than the first version. Tracking with camera motion compensation ran at 30 frames/s per CPU core, 8 clips in parallel. The whole test set took 7.5 + 3.3 min.
+
+**Upper bound on the test set:** the same tracker on perfect detections (ground truth without IDs, no box merging) reaches **HOTA 87.7** (people 87.1, AssA 77.7; ball 95.7). Detection errors cost about 25 HOTA. Even with perfect boxes, association stops at AssA 78: players who leave the picture and come back get new IDs.
 
 **Roles on the test set** (`scripts/eval_roles.py`, 500,798 matched person boxes): role accuracy 96.4 %.
 

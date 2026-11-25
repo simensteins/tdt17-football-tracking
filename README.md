@@ -58,7 +58,7 @@ Detect once on a GPU, then track and evaluate on CPU:
 python scripts/detect.py data/tracking-2023 --split val --model <weights.pt> --imgsz 1280 --out <detections dir>
 python scripts/track.py data/tracking-2023 --split val --detections <detections dir or 'gt'> \
     --tracker botsort.yaml --set track_buffer=150 fuse_score=false match_thresh=0.9 new_track_thresh=0.5 \
-    --merge-iou 0.7 --ball single --ball-conf 0.2 --images --interpolate 10 --out <tracks dir>
+    --merge-iou 0.7 --ball path --images --interpolate 10 --out <tracks dir>
 python scripts/eval_tracking.py data/tracking-2023 <tracks dir> [<tracks dir> ...] --split val --by-action
 ```
 
