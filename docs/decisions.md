@@ -91,7 +91,8 @@ Detection and tracking both get full experiments, not detection with a light tra
   - Accuracy (mAP, HOTA) doesn't depend on the GPU, so results stay comparable.
   - Time and energy do. Each job logs its GPU name and power draw, and training cost is reported per GPU type.
   - Inference speed is measured on one GPU type for all models, so speed comparisons stay fair.
-- **Training runs in 2-hour chunks.** The 12-hour D2 jobs waited in the queue (reason `Priority`, estimated start after the deadline), while a 1-hour job started at once: Slurm fills gaps with short jobs. Each run is now submitted with `--time=02:00:00`, followed by resume jobs that continue from `last.pt` (`yolo detect train resume`). At most one epoch is lost per chunk.
+- **Time limits come from measured runtimes plus about 25 %.** The 12-hour D2 jobs waited in the queue (reason `Priority`, estimated start after the deadline), while 1-hour jobs started at once: Slurm only fits low-priority jobs into gaps they fit in, so a generous limit means hours of waiting. Unknown runtimes are measured with a short job first.
+- **No chained resume jobs.** D2 was given follow-up jobs (`yolo detect train resume`) in case it hit its limit. It finished early, and the follow-ups did not stop but trained a new model on Ultralytics' built-in 4-image demo dataset for 100 epochs (about 3 minutes each, wasted). Runs are now sized to finish within one job.
 
 ### Experiment plan
 Each experiment answers a question raised by the data.
@@ -128,6 +129,32 @@ COCO classes `person` (players, goalkeepers and referees merged) and `sports bal
 - People are found well even without fine-tuning (recall 0.87–0.92), but mAP@50:95 stays around 0.5: the boxes do not match the SoccerNet annotation style tightly, and the model cannot tell players, goalkeepers and referees apart.
 - The ball is the weak point: 32 % found at 640, 38 % at 1280.
 - Doubling the resolution raises ball mAP@50 by 28 % (0.294 → 0.375) and person recall from 0.87 to 0.92, at 3.6× the inference time. The resolution effect is visible before any fine-tuning.
+
+### D2: fine-tuned YOLO26m at 640 and 1280 (validation match 6)
+Trained on games 4 and 9 (5,700 frames, every 5th), 50 epochs planned with early stopping after 15 epochs without improvement. Ultralytics chose AdamW with learning rate 0.00125. Scores are for the best epoch.
+
+| Input | Class | P | R | mAP@50 | mAP@50:95 |
+|---|---|---|---|---|---|
+| 640 | all | 0.718 | 0.607 | 0.638 | 0.345 |
+| 640 | player | 0.906 | 0.878 | 0.930 | 0.541 |
+| 640 | goalkeeper | 0.453 | 0.488 | 0.448 | 0.235 |
+| 640 | referee | 0.873 | 0.823 | 0.899 | 0.506 |
+| 640 | ball | 0.638 | 0.240 | 0.275 | 0.099 |
+| 1280 | all | 0.679 | 0.685 | 0.651 | 0.362 |
+| 1280 | player | 0.859 | 0.937 | 0.952 | 0.580 |
+| 1280 | goalkeeper | 0.195 | 0.609 | 0.276 | 0.162 |
+| 1280 | referee | 0.906 | 0.862 | 0.940 | 0.548 |
+| 1280 | ball | 0.758 | 0.333 | 0.437 | 0.158 |
+
+| Run | GPU | Time | Mean power | GPU energy |
+|---|---|---|---|---|
+| 640 | A100 40 GB | 12.8 min (16 epochs, 48 s each) | 168 W | 0.04 kWh |
+| 1280 | H100 80 GB | 18.4 min (16 epochs, 69 s each) | 493 W | 0.16 kWh |
+
+- **The best epoch was the first one in both runs**, so both stopped after 16 epochs. Training loss fell steadily, but validation mAP@50:95 swung between 0.28 and 0.36 with no upward trend. Training on two matches overfits to their kits and stadiums, and the high learning rate makes the validation scores unstable. → The fine-tuning recipe needs fixing before the D2 comparison means much (lower learning rate, frozen backbone).
+- **1280 beats 640 for the ball** even so: mAP@50 0.437 against 0.275, recall 0.33 against 0.24. The resolution finding from D1 holds.
+- **Players and referees are learned; goalkeepers are not.** Goalkeepers wear a different kit in every match, and two training matches show only four goalkeeper kits. At 1280, goalkeeper precision is 0.195: other people are called goalkeepers.
+- **The A100 ran at 168 W of its 250 W during training at 640**, so training was held back by image loading on the CPU, not by the GPU. Full-HD JPEGs are decoded four at a time for every mosaic image.
 
 ### Tracking pipeline design
 - **Detect once, track many times.** `scripts/detect.py` (GPU) stores every detection down to confidence 0.01 per sequence; `scripts/track.py` (CPU) runs any tracker configuration on stored detections or on the ground truth. Tracker settings can be explored without rerunning the detector.
