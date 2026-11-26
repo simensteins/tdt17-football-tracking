@@ -111,6 +111,13 @@ python scripts/merge_yolo_datasets.py --out $Y/rfdetr-gsr \
 python scripts/train_rfdetr.py $Y/rfdetr-gsr --size medium --resolution 1280 --epochs 2 --hue 0.5 --out <run dir>
 ```
 
+## Figures and videos
+
+```bash
+python scripts/make_figures.py data/tracking-2023 --out outputs/figures      # slide figures (labels are enough)
+python scripts/render_tracks.py data/tracking-2023 SNMOT-148 <tracks dir> --scale 1.0 --out <video.mp4>
+```
+
 ## Repository layout
 
 | Path | Contents |
