@@ -725,6 +725,24 @@ By clip type: goals 72.7, substitutions 69.9, penalties 69.4 … shots on target
 
 - **The pipeline adds 10.8 HOTA over the off-the-shelf baseline** (9.7 in test run 2, 10.0 in run 3), cuts ID switches by almost two thirds and triples ball HOTA. The baseline also cannot tell players, goalkeepers and referees apart.
 
+**Demo clip for the presentation:** SNMOT-148 (game 8, a goal), shown side by side with the off-the-shelf baseline (`scripts/render_tracks.py`, `--no-roles` for the baseline). It was chosen after seeing the scores and is better than average: HOTA 72.7 against 57.7 for the baseline (test averages 64.2 and 53.4), 19 against 72 ID switches. SNMOT-136 (64.8, close to the average) was the alternative.
+
+**Compared with published results** (SoccerMaster, Yang et al. 2026, Table 5, SoccerNet-Tracking test set; we take this to be the same 49 test clips; all classes as one):
+
+| Method | HOTA | DetA | AssA | MOTA | IDF1 |
+|---|---|---|---|---|---|
+| YOLOv8 + OC-SORT | 54.6 | 63.5 | 47.1 | 76.2 | 62.5 |
+| YOLOv8 + StrongSORT++ | 56.2 | 62.9 | 50.3 | 75.0 | 66.5 |
+| YOLOv8 + PRTReID | 59.8 | 61.1 | **58.6** | 73.1 | 74.5 |
+| SoccerMaster + MOTIP (16 H800 GPUs for 9 days of pretraining) | 59.1 | 65.2 | 53.9 | 81.6 | 74.6 |
+| Ours, off-the-shelf baseline (COCO YOLO26m + ByteTrack) | 53.4 | | | | |
+| Ours, test run 4 without jersey linking | 63.2 | **72.2** | 55.5 | **87.5** | 74.2 |
+| **Ours, test run 4** | **64.2** | **72.2** | 57.3 | **87.5** | **76.0** |
+
+- **+4.4 HOTA over the best published pipeline**, almost entirely from detection (DetA +7 over the best). Our off-the-shelf baseline lands near their YOLOv8 + OC-SORT (53.4 against 54.6), which suggests the evaluations are comparable.
+- **Association is where the published work is ahead:** PRTReID's appearance re-identification (fine-tuned on SoccerNet) reaches AssA 58.6 against our 57.3. ReID is the obvious next step for us.
+- Caveats: our pipeline is offline (ball path, gap filling and jersey linking use future frames, which suits post-match analysis), it uses three extra training matches from SoccerNet-GSR, and the test set was looked at four times. The paper's exact evaluation settings are not given.
+
 **Upper bound on the test set:** the same tracker on perfect detections (ground truth without IDs, no box merging) reaches **HOTA 87.7** (people 87.1, AssA 77.7; ball 95.7). Detection errors cost about 25 HOTA. Even with perfect boxes, association stops at AssA 78: players who leave the picture and come back get new IDs.
 
 **Roles on the test set** (`scripts/eval_roles.py`, 500,798 matched person boxes): role accuracy 96.4 %.
@@ -739,6 +757,38 @@ By clip type: goals 72.7, substitutions 69.9, penalties 69.4 … shots on target
 - **Referees fail in one match only:** recall 99.6 % in game 7 and 99.7 % in game 8, but **22.5 % in game 11**, where the referee wears a dark green kit in bright sun. No training match had a referee like that, so he is called a player. A clear example of what three training matches cannot cover.
 
 ---
+
+## Sustainability: energy use of the whole project
+`scripts/energy_report.py` adds up every IDUN job of the project (236 jobs from 24 to 26 November, including 18 that failed, timed out or were cancelled).
+- **GPU energy is measured:** `jobs/gpu.slurm` logs the job's GPU power every 30 s; a job's energy is its mean power times its run time. One 18-minute test job has no log and is counted at the mean power of the others (242 W).
+- **CPU energy is estimated** from allocated core-hours at 7 W per core: IDUN's CPU nodes are dual Intel Xeon (Dell C6420/C6520, 48–56 cores, about 150–205 W per processor). Slurm does not meter it.
+- Not included: data-centre overhead (cooling; a PUE of 1.2–1.5 would add 20–50 %), the laptop used for development and evaluation, and downloads.
+
+| Work | Jobs | GPU-hours | GPU energy (measured) | CPU core-hours | CPU energy (estimated) | Total |
+|---|---|---|---|---|---|---|
+| Training (27 runs) | 27 | 7.5 | 1.86 kWh | 60 | 0.42 kWh | **2.28 kWh** |
+| Jersey reading (Florence on CPUs, Qwen on GPUs, benchmarks) | 128 | 0.5 | 0.13 kWh | 280 | 1.96 kWh | **2.09 kWh** |
+| Detection on validation and test | 16 | 1.7 | 0.37 kWh | 14 | 0.10 kWh | 0.47 kWh |
+| Tracking, tuning and evaluation | 58 | 0 | | 59 | 0.41 kWh | 0.41 kWh |
+| Other (dataset building, videos, one test job) | 7 | 0.3 | 0.07 kWh | 2 | 0.02 kWh | 0.09 kWh |
+| **Total** | **236** | **10.1** | **2.44 kWh** | **416** | **2.91 kWh** | **5.3 kWh** |
+
+- **5.3 kWh is about 31 km in an electric car** (17 kWh per 100 km), or 37–47 km with data-centre overhead.
+- **Jersey reading on CPUs was the least efficient work:** Florence-2 read the test set in about 0.76 kWh (estimated) on 49 × 16 CPU cores, while Qwen3.5-4B, a model about 6× larger, read it in 0.036 kWh on one GPU. Running Florence on CPUs was forced by a full GPU queue; on a GPU it would have cost about as little as Qwen.
+- **Against SoccerMaster:** its pretraining took 16 H800 GPUs for about 9 days, 3,456 GPU-hours (up to about 2,400 kWh at the 700 W rating of an H800 SXM). That is 340 times all our GPU-hours together, for a model 5 HOTA below our pipeline on what we take to be the same test set (Table 5 of the paper).
+
+**Running the final pipeline** (test set, 36,750 frames; H100 GPUs):
+
+| Step | Time | Energy | Per 90-minute match (135,000 frames) |
+|---|---|---|---|
+| YOLO26m detection | 6 min | 0.030 kWh | 0.11 kWh |
+| RF-DETR detection (used for the ball only) | 16 min | 0.129 kWh | 0.47 kWh |
+| Tracking (BoT-SORT + GMC, 8 clips in parallel) | 4 min | 0.004 kWh | 0.01 kWh |
+| Jersey reading (Qwen3.5-4B) | 7.5 min | 0.036 kWh | 0.13 kWh |
+| **Total** | | **0.20 kWh** | **0.73 kWh** (about 4 km in an electric car) |
+
+- **The RF-DETR ball costs two thirds of the inference energy for +2.2 ball HOTA.** For post-match analysis, where the ball path matters, this is defensible; a cheaper option would be a small ball-only detector or running RF-DETR at a lower resolution.
+- The off-the-shelf baseline (COCO YOLO26m, 0.025 kWh on the test set) is cheaper still, but 10.8 HOTA worse, cannot tell roles apart and barely finds the ball.
 
 ## Open questions
 

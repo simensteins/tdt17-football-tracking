@@ -50,6 +50,13 @@ GPU work goes through `jobs/gpu.slurm`, which runs any command and logs GPU powe
 sbatch --job-name=<name> jobs/gpu.slurm yolo detect train data=... model=... imgsz=1280
 ```
 
+`scripts/energy_report.py` adds up the energy of all jobs (GPU measured from these logs, CPU estimated from core-hours):
+
+```bash
+sacct -X -P -n -S 2026-11-01 -o JobID,JobName,Partition,State,ElapsedRaw,AllocTRES > sacct.txt
+python scripts/energy_report.py sacct.txt --gpu-logs logs
+```
+
 ## Tracking
 
 Detect once on a GPU, then track and evaluate on CPU:
