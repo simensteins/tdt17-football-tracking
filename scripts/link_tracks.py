@@ -8,7 +8,7 @@ they show the same jersey number, role and team.
         --split val --out <linked tracks dir>
 
 - A track's number comes from the readings of scripts/read_jerseys.py, and is
-  trusted only when they agree (see trusted_number).
+  trusted only when they agree (see football.jerseys.trusted_number).
 - Players are split into two teams per clip by shirt colour (2-means on the
   mean CIELAB colour of their crops). Goalkeepers and referees are kept apart by role.
 - Tracks with the same (role, team, number) that never overlap in time get one
@@ -26,6 +26,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from football.data import CLASSES, SPLITS, find_sequences  # noqa: E402
+from football.jerseys import trusted_number  # noqa: E402
 from football.tracking import BALL, read_mot, write_mot  # noqa: E402
 
 PLAYER = CLASSES.index("player")
@@ -42,30 +43,6 @@ def two_means(x: np.ndarray, iterations: int = 20) -> np.ndarray:
             break
         centres = new
     return labels
-
-
-def trusted_number(numbers: pd.Series, role: int, min_votes: int, min_share: float,
-                   single_digits: bool = True) -> str | None:
-    """The track's jersey number, if the readings agree enough.
-
-    Florence-2 often drops a digit of a two-digit number (24 read as 2) and
-    reads a front view without a number as '1'. So a two-digit number read at
-    least min_votes times wins; single digits need one more vote, and '1'
-    only counts for goalkeepers (outfield players do not wear it).
-    """
-    numbers = numbers.dropna()
-    two = numbers[numbers.str.len() == 2].value_counts()
-    if len(two) and two.iloc[0] >= min_votes and two.iloc[0] / two.sum() >= min_share:
-        return two.index[0]
-    if not single_digits:
-        return None
-    one = numbers[numbers.str.len() == 1]
-    if role != CLASSES.index("goalkeeper"):
-        one = one[one != "1"]
-    one = one.value_counts()
-    if len(one) and one.iloc[0] >= min_votes + 1 and one.iloc[0] / one.sum() >= min_share:
-        return one.index[0]
-    return None
 
 
 def track_keys(tracks: pd.DataFrame, readings: pd.DataFrame, min_votes: int, min_share: float,
@@ -111,12 +88,16 @@ def main() -> None:
     parser.add_argument("--split", choices=SPLITS, required=True)
     parser.add_argument("--min-votes", type=int, default=2, help="readings needed to trust a number")
     parser.add_argument("--min-share", type=float, default=0.6)
+    parser.add_argument("--min-conf", type=float, default=0.0,
+                        help="ignore readings whose answer probability is below this (readers that give one)")
     parser.add_argument("--single-digits", action="store_true",
                         help="also trust one-digit numbers (often a two-digit number missing a digit)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
 
     readings = pd.read_csv(args.readings, dtype={"number": "string"})
+    if "conf" in readings:
+        readings.loc[readings["conf"] < args.min_conf, "number"] = pd.NA
     args.out.mkdir(parents=True, exist_ok=True)
     linked_total = 0
     for seq in (s for s in find_sequences(args.root) if s.game_id in SPLITS[args.split]):

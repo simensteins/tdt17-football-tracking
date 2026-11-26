@@ -57,19 +57,24 @@ Detect once on a GPU, then track and evaluate on CPU:
 ```bash
 python scripts/detect.py data/tracking-2023 --split val --model <weights.pt> --imgsz 1280 --out <detections dir>
 python scripts/track.py data/tracking-2023 --split val --detections <detections dir or 'gt'> \
-    --tracker botsort.yaml --set track_buffer=150 fuse_score=false match_thresh=0.9 new_track_thresh=0.5 \
+    --tracker botsort.yaml --set track_buffer=150 fuse_score=false match_thresh=0.95 new_track_thresh=0.5 \
     --merge-iou 0.7 --ball path --images --interpolate 10 --out <tracks dir>
 python scripts/eval_tracking.py data/tracking-2023 <tracks dir> [<tracks dir> ...] --split val --by-action
 ```
 
 `--detections gt` uses the ground-truth boxes without IDs, i.e. a perfect detector.
 
-Tracks of a player who left the picture and came back can be joined by jersey number (Florence-2 OCR, then linking by role, team and number):
+`--ball-detections <dir>` takes the ball candidates from a second detector (people still from `--detections`); the final pipeline uses RF-DETR's balls with `--ball-path tau=0.3`.
+
+Tracks of a player who left the picture and came back can be joined by jersey number (Qwen3.5-4B or Florence-2 reads the numbers, then tracks are linked by role, team and number):
 
 ```bash
-python scripts/read_jerseys.py data/tracking-2023 <tracks dir> --split val --out <tracks dir>/jerseys.csv
-python scripts/link_tracks.py data/tracking-2023 <tracks dir> <tracks dir>/jerseys.csv --split val --out <linked tracks dir>
+python scripts/read_jerseys.py data/tracking-2023 <tracks dir> --split val --reader qwen --per-track 10 --out <tracks dir>/jerseys.csv
+python scripts/link_tracks.py data/tracking-2023 <tracks dir> <tracks dir>/jerseys.csv --split val \
+    --single-digits --min-conf 0.5 --out <linked tracks dir>
 ```
+
+`scripts/bench_jersey_readers.py` measures a reader against the jersey numbers labelled in SoccerNet-GSR (see below).
 
 ## Extra models and data
 

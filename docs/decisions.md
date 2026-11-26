@@ -395,6 +395,55 @@ Tracking on game 6 with the chosen pipeline (RF-DETR's tracker thresholds; last 
 - **The YOLO final (`final-m-1280-gsr-hue`) is the final detector**, by the rule set before this run: RF-DETR does not gain clearly in HOTA, and costs 7× the model time. Its role and ball gains are reported as the trade-off.
 - Test detection with the YOLO final: 2.6 ms model time per frame on an H100, 6 min for the 36,750 test frames.
 
+### Third pipeline: tracker re-tune, RF-DETR's ball and a new jersey reader
+After test run 3, three remaining weaknesses were addressed, each chosen on validation with detectors that held game 6 out: D7 stands in for the YOLO final, `rfdetr-m-gsr-hue` for the RF-DETR final.
+
+**Tracker thresholds re-tuned for the new detector.** The thresholds were tuned on D2c, and the new detector made more ID switches on test. Grid on D7's validation detections (BoT-SORT + GMC, chosen pipeline otherwise): `track_high_thresh` 0.15–0.5, `new_track_thresh` 0.4–0.7, `match_thresh` 0.85–0.95 (31 settings).
+
+| Setting | HOTA | People | AssA people | IDSW |
+|---|---|---|---|---|
+| Current (high 0.25, new 0.5, match 0.9) | 65.5 | 66.7 | 58.9 | 538 |
+| **Best: match 0.95** | **65.6** | **66.8** | **59.2** | **526** |
+| Lower high/new thresholds (0.15–0.2, 0.4–0.5) | 65.0–65.3 | 66.2–66.5 | 58.0–58.4 | 580–709 |
+| Higher high/new thresholds (0.4–0.5, 0.6–0.7) | 63.8–64.7 | 64.4–65.9 | 56.3–58.7 | 496–586 |
+
+- **The current settings were already near the optimum:** +0.1 HOTA. `match_thresh=0.95` is taken anyway, since it is ahead for every other combination.
+
+**Ball candidates from RF-DETR.** RF-DETR found the ball better on validation (+2.0 ball HOTA), but costs 7× YOLO's model time for everything. `track.py --ball-detections` takes people from YOLO and only the ball from RF-DETR. The ball path's `tau` is a confidence level and RF-DETR's confidences are calibrated differently, so it was tuned for both detectors (`tau` 0.1–0.6, `restart_cost` 1.5–6, ball HOTA on game 6):
+
+| Ball candidates | Best setting | Ball HOTA |
+|---|---|---|
+| YOLO D7 | tau 0.2, restart 3 (current) | 43.2 |
+| **RF-DETR** | **tau 0.3, restart 3** | **45.6** |
+
+- **+2.4 ball HOTA**, for running RF-DETR next to YOLO (about 40 ms more per frame). `restart_cost` changes the result by at most 0.1.
+
+**A jersey reader that can say "no number".** Florence-2 reads "1" in a third of crops and yields a trusted number for few tracks (T7). Its replacement is **Qwen3.5-4B** (Alibaba, February 2026, Apache 2.0, 9.3 GB), a vision-language model asked to read the number or answer "none" (`scripts/read_jerseys.py --reader qwen`, code in `football/jerseys.py`). Crops are upscaled to 224 px height so the number covers several of the model's 32 px vision tokens.
+- **Benchmark on labelled numbers, without touching validation or test:** SoccerNet-GSR labels a jersey number per player track. Its valid split (games 2, 3 and 5) has 1,221 player and goalkeeper tracks, 966 of them with a number. `scripts/bench_jersey_readers.py` chooses frames and crops as for our tracks, from the ground-truth boxes, and decides each track's number with the linking rule.
+- **Without a confidence filter, Qwen guesses:** on crops without a visible number it answers "10" or "1" instead of "none", and only 45 % of its track numbers are right. So the reader also returns the probability of its answer, and readings below a minimum probability count as no reading.
+
+| Reader, rule (min. 2 agreeing readings) | Tracks given a number | Right | Labelled tracks with the right number |
+|---|---|---|---|
+| Florence-2, two-digit only (T7's choice) | 199 | 92.0 % | 18.9 % |
+| Florence-2, one- and two-digit | 333 | 75.7 % | 26.1 % |
+| Qwen3.5-4B, two-digit, p ≥ 0.5 | 361 | 94.5 % | 35.3 % |
+| Qwen3.5-4B, one- and two-digit, p ≥ 0.5 | 469 | 94.7 % | 46.0 % |
+| Qwen3.5-4B, one- and two-digit, p ≥ 0.8 | 366 | 98.1 % | 37.2 % |
+
+- **Qwen's numbers are more often right and cover about twice as many tracks.** Single digits become usable: Qwen reads "1" on 5 % of crops (Florence: 33 %). It is also slightly faster on a GPU (40 crops/s against 34).
+
+Linking on game 6 (D7 tracks; links checked against ground-truth identities):
+
+| Reader and rule | Links | Wrong | HOTA | AssA | IDF1 | IDSW |
+|---|---|---|---|---|---|---|
+| None | 0 | | 65.5 | 58.6 | 78.6 | 538 |
+| Florence-2, two-digit only | 9 | 0 | 65.8 | 59.2 | 79.0 | 529 |
+| Qwen, one- and two-digit, p ≥ 0.8 | 19 | 0 | 66.0 | 59.6 | 79.4 | 521 |
+| Qwen, two-digit, p ≥ 0.5 | 23 | 0 | 66.2 | 59.9 | 79.7 | 516 |
+| **Qwen, one- and two-digit, p ≥ 0.5** | **25** | **0** | **66.3** | **60.0** | **79.8** | **515** |
+
+- **Chosen: Qwen, one- and two-digit numbers, p ≥ 0.5.** Every link is right, and linking now gains +0.8 HOTA instead of +0.3.
+
 ### Final detector, first version (test runs 1 and 2): trained on all three non-test matches
 - **Settings chosen on validation:** YOLO26m at 1280, frozen backbone, AdamW at learning rate 0.0002, 8 epochs (`final-m-1280-trainval`).
 - **Retrained on games 4, 6 and 9** (8,550 frames). Game 6 was only held out to make choices; with those made, a third match of kits, goalkeepers and stadium is worth more than a validation score. Goalkeepers should gain most.
@@ -583,7 +632,7 @@ Detections from COCO-pretrained YOLO26m at 1280, no fine-tuning (`scripts/detect
 
 ---
 
-## Test set: final pipeline (games 7, 8, 11; 49 clips, 36,750 frames; three runs, all reported)
+## Test set: final pipeline (games 7, 8, 11; 49 clips, 36,750 frames; four runs, all reported)
 Final detector (YOLO26m at 1280, frozen backbone, trained on games 4, 6 and 9, last epoch) and the chosen tracker (BoT-SORT + camera motion compensation, tuned thresholds, merge 0.7, single ball ≥ 0.2, gaps ≤ 10 frames filled). Nothing was changed after seeing these numbers.
 
 | Subset | HOTA | DetA | AssA | LocA | IDF1 | MOTA | IDSW |
@@ -644,16 +693,37 @@ By clip type: goals 70.9, shots off target 66.6, shots on target 58.2, corners 5
 - **Jersey linking carries over:** 27 tracks joined, +0.3 HOTA and +0.5 AssA on people, close to its +0.4 on validation. Whether each link is correct was not checked on the test set.
 - Jersey reading: 49 CPU jobs (16 cores each), at most 12.7 min per clip.
 
+**Fourth test run: third pipeline.** The three changes chosen on validation after test run 3 (see "Third pipeline"): `match_thresh=0.95`, ball candidates from RF-DETR (`rfdetr-m-all-hue`, tau 0.3), and jersey linking with Qwen3.5-4B (one- and two-digit numbers, answer probability ≥ 0.5). On game 6 together they gave 66.4 HOTA against 65.8 for test run 3's pipeline (ball +2.4, people +0.5, all 23 links right). The detectors are unchanged. This is the fourth look at the test set; all four runs are reported.
+
+| Test run | HOTA all | DetA | AssA | HOTA people | AssA people | IDF1 | IDSW | HOTA ball | Links |
+|---|---|---|---|---|---|---|---|---|---|
+| 3 | 63.4 | 72.1 | 56.0 | 64.8 | 56.3 | 74.5 | 1,404 | 40.5 | 27 |
+| 4 without linking | 63.2 | **72.2** | 55.5 | 64.4 | 55.8 | 74.2 | 1,424 | **42.8** | |
+| **4: third pipeline** | **64.2** | **72.2** | **57.3** | **65.5** | **57.7** | **76.0** | **1,355** | **42.8** | 78 |
+
+| Group | HOTA all (run 3) | HOTA all (run 4) | HOTA ball (run 3) | HOTA ball (run 4) |
+|---|---|---|---|---|
+| Game 7 | 65.1 | 66.0 | 39.9 | 43.2 |
+| Game 8 | 62.9 | 64.0 | 44.4 | 45.7 |
+| Game 11 | 62.2 | 62.7 | 35.1 | 37.8 |
+
+By clip type: goals 72.7, substitutions 69.9, penalties 69.4 … shots on target 59.4, corners 56.4. Role accuracy is unchanged (98.5 %).
+
+- **Both validated gains carry over:** RF-DETR's ball +2.2 HOTA (validation +2.4), better in every match; Qwen's linking +1.0 HOTA and +1.8 AssA (validation +0.7), with 78 tracks joined instead of 27.
+- **The tracker re-tune does not:** without linking, people HOTA is 64.4 against 64.5. It was +0.1 on validation, within noise.
+- Cost: RF-DETR runs next to YOLO for the ball (about 40 ms more per frame on an A100), and Qwen reads 18,500 crops in 7.5 min on one GPU.
+
 **Baseline and upper bound on the test set:**
 
 | Pipeline | HOTA all | HOTA people | AssA people | IDSW | HOTA ball |
 |---|---|---|---|---|---|
 | Off-the-shelf: COCO YOLO26m at 1280 + default ByteTrack | 53.4 | 55.0 | 46.4 | 3,902 | 13.7 |
 | Ours (first final pipeline, test run 2) | 63.1 | 64.4 | 56.1 | 1,340 | 41.4 |
-| **Ours (second final pipeline, test run 3)** | **63.4** | **64.8** | **56.3** | 1,404 | 40.5 |
+| Ours (second final pipeline, test run 3) | 63.4 | 64.8 | 56.3 | 1,404 | 40.5 |
+| **Ours (third pipeline, test run 4)** | **64.2** | **65.5** | **57.7** | 1,355 | **42.8** |
 | Our tracker on perfect detections | 87.7 | 87.1 | 76.7 | 1,264 | 95.7 |
 
-- **The pipeline adds 10.0 HOTA over the off-the-shelf baseline** (9.7 in test run 2), cuts ID switches by almost two thirds and triples ball HOTA. The baseline also cannot tell players, goalkeepers and referees apart.
+- **The pipeline adds 10.8 HOTA over the off-the-shelf baseline** (9.7 in test run 2, 10.0 in run 3), cuts ID switches by almost two thirds and triples ball HOTA. The baseline also cannot tell players, goalkeepers and referees apart.
 
 **Upper bound on the test set:** the same tracker on perfect detections (ground truth without IDs, no box merging) reaches **HOTA 87.7** (people 87.1, AssA 77.7; ball 95.7). Detection errors cost about 25 HOTA. Even with perfect boxes, association stops at AssA 78: players who leave the picture and come back get new IDs.
 
