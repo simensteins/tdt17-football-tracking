@@ -1,4 +1,4 @@
-"""Figures for the presentation, as PNG files sized for 16:9 slides.
+"""Figures for the presentation, as PNG files sized for 16:9 slides, numbered in talk order.
 
     python scripts/make_figures.py data/tracking-2023 --out outputs/figures
 
@@ -94,6 +94,66 @@ def box_heights(root: Path, out: Path) -> None:
     save(fig, out, "01-box-heights")
 
 
+# --- method ---------------------------------------------------------------------------------------
+
+def pipeline(out: Path) -> None:
+    from matplotlib.patches import FancyBboxPatch
+
+    fig, ax = plt.subplots(figsize=SIZE)
+    ax.set_xlim(0, 14.2)
+    ax.set_ylim(0.3, 5.1)
+    ax.axis("off")
+    w, h = 2.0, 1.3
+    people_y, ball_y = 3.45, 1.35
+    x = dict(zip(("input", "detect", "associate", "post1", "post2", "output"), np.arange(6) * 2.4 + 0.1))
+
+    # the offline part works on the whole clip at once, which suits post-match analysis
+    ax.add_patch(FancyBboxPatch((x["post1"] - 0.15, 0.4), 2 * w + 0.7, 4.65, boxstyle="round,pad=0,rounding_size=0.12",
+                                facecolor="#f0efec", edgecolor="none"))
+    for key, text in (("input", "Input"), ("detect", "Detection (GPU)"), ("associate", "Association (online)"),
+                      ("post1", "Post-processing (offline, whole clip)"), ("output", "Output")):
+        ax.text(x[key], 4.7, text, fontsize=14, fontweight="bold", color=INK2, va="center")
+
+    def box(left, y, name, detail, colour, height=h):
+        ax.add_patch(FancyBboxPatch((left, y - height / 2), w, height, boxstyle="round,pad=0,rounding_size=0.1",
+                                    facecolor=SURFACE, edgecolor=AXIS, linewidth=1.2))
+        ax.add_patch(FancyBboxPatch((left, y - height / 2), 0.09, height, boxstyle="square,pad=0", facecolor=colour,
+                                    edgecolor="none"))
+        ax.text(left + 0.22, y + height / 2 - 0.18, name, fontsize=12.5, fontweight="bold", color=INK, va="top")
+        ax.text(left + 0.22, y + height / 2 - 0.5, detail, fontsize=11, color=INK2, va="top", linespacing=1.35)
+
+    def arrow(x0, y0, x1, y1):
+        ax.annotate("", (x1, y1), (x0, y0), arrowprops={"arrowstyle": "-|>", "color": MUTED, "linewidth": 1.5,
+                                                        "shrinkA": 2, "shrinkB": 2, "mutation_scale": 16})
+
+    tall = people_y - ball_y + h
+    mid = (people_y + ball_y) / 2
+    box(x["input"], mid, "Broadcast video", "1920 × 1080, 25 fps,\n30 s clips", MUTED, height=tall)
+    box(x["detect"], people_y, "YOLO26m", "players, goalkeepers,\nreferees; 1280 px", BLUE)
+    box(x["detect"], ball_y, "RF-DETR-M", "ball candidates only;\nDINOv2, 1280 px", ORANGE)
+    box(x["associate"], people_y, "BoT-SORT + GMC", "camera motion\nremoved; lost tracks\nkept for 6 s", BLUE)
+    box(x["post1"], people_y, "Fill gaps", "up to 10 frames,\nlinear", BLUE)
+    box(x["post2"], people_y, "Jersey linking", "Qwen3.5-4B reads\nnumbers; same\nnumber → one ID",
+        BLUE)
+    box(x["post1"], ball_y, "Ball path", "best path through\nall candidates\nin the clip", ORANGE)
+    box(x["post2"], ball_y, "Fill gaps", "up to 10 frames,\nlinear", ORANGE)
+    box(x["output"], mid, "Tracks", "ID and role per\nperson, one ball,\nevery frame", MUTED, height=tall)
+
+    for y in (people_y, ball_y):
+        arrow(x["input"] + w, y, x["detect"], y)
+        arrow(x["post1"] + w, y, x["post2"], y)
+        arrow(x["post2"] + w, y, x["output"], y)
+    arrow(x["detect"] + w, people_y, x["associate"], people_y)
+    arrow(x["associate"] + w, people_y, x["post1"], people_y)
+    arrow(x["detect"] + w, ball_y, x["post1"], ball_y)
+
+    title(fig, "Pipeline: tracking by detection, with post-match refinement",
+          "People (blue) and the ball (orange) are detected and tracked separately; "
+          "the shaded steps use the whole clip")
+    fig.subplots_adjust(top=0.86, bottom=0.02, left=0.01, right=0.99)
+    save(fig, out, "02-pipeline")
+
+
 # --- detectors ------------------------------------------------------------------------------------
 
 DETECTORS = [  # validation match 6, last epoch; decisions.md D2c, D2f, D6, D7, D5 and the RF-DETR check
@@ -125,7 +185,7 @@ def detectors(out: Path) -> None:
     title(fig, "Detection gains barely reach tracking",
           "Validation match 6, last epoch. Blue: extra matches + hue, the recipe of the final YOLO")
     fig.subplots_adjust(top=0.8)
-    save(fig, out, "02-detectors")
+    save(fig, out, "03-detectors")
 
 
 # --- tracking results -----------------------------------------------------------------------------
@@ -149,7 +209,7 @@ def test_runs(out: Path) -> None:
     title(fig, "Test set: +10.8 HOTA over the off-the-shelf baseline",
           "Games 7, 8 and 11 (49 clips, never trained or tuned on); all four test runs reported")
     fig.subplots_adjust(top=0.84)
-    save(fig, out, "03-test-runs")
+    save(fig, out, "04-test-runs")
 
 
 def paper(out: Path) -> None:
@@ -171,7 +231,7 @@ def paper(out: Path) -> None:
           "SoccerMaster (Yang et al., 2026), Table 5. Our gain is detection (DetA 72.2 vs ≤ 65.2);\n"
           "PRTReID still associates better (AssA 58.6 vs 57.3)")
     fig.subplots_adjust(top=0.78)
-    save(fig, out, "04-paper-comparison")
+    save(fig, out, "05-paper-comparison")
 
 
 def clip_types(out: Path) -> None:
@@ -195,7 +255,7 @@ def clip_types(out: Path) -> None:
           "Test set by clip type. Lowest (orange): set pieces and shots on target; corners and free kicks are\n"
           "the most crowded clips (15 % of people overlap another, against 4 % in kick-offs)")
     fig.subplots_adjust(top=0.84)
-    save(fig, out, "05-clip-types")
+    save(fig, out, "06-clip-types")
 
 
 def roles(out: Path) -> None:
@@ -223,7 +283,7 @@ def roles(out: Path) -> None:
     title(fig, "Extra matches and hue augmentation find game 11's referee",
           "He wears a dark green kit none of the first three training matches had")
     fig.subplots_adjust(top=0.78)
-    save(fig, out, "06-roles")
+    save(fig, out, "07-roles")
 
 
 def jersey_readers(out: Path) -> None:
@@ -254,7 +314,7 @@ def jersey_readers(out: Path) -> None:
           "SoccerNet-GSR games 2, 3 and 5 (966 tracks with a labelled number, none from our validation or "
           "test matches)")
     fig.subplots_adjust(top=0.84)
-    save(fig, out, "07-jersey-readers")
+    save(fig, out, "08-jersey-readers")
 
 
 # --- sustainability -------------------------------------------------------------------------------
@@ -292,7 +352,7 @@ def energy(out: Path) -> None:
           "All 236 IDUN jobs; CPU at 7 W per core; cooling not included. SoccerMaster's pretraining "
           "used 340× our GPU-hours")
     fig.subplots_adjust(top=0.78)
-    save(fig, out, "08-energy")
+    save(fig, out, "09-energy")
 
 
 def main() -> None:
@@ -302,6 +362,7 @@ def main() -> None:
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     box_heights(args.root, args.out)
+    pipeline(args.out)
     detectors(args.out)
     test_runs(args.out)
     paper(args.out)
