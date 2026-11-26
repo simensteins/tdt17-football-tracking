@@ -41,9 +41,12 @@ def main() -> None:
 
     confusion = np.zeros((len(PEOPLE), len(PEOPLE)), dtype=int)  # rows: true role, columns: predicted
     for seq in (s for s in find_sequences(args.root) if s.game_id in SPLITS[args.split]):
+        path = args.tracks / f"{seq.name}.txt"
+        if not path.exists():
+            continue
         gt = gt_detections(seq)
         gt = gt[gt["cls"] != BALL]
-        tracks = read_mot(args.tracks / f"{seq.name}.txt")
+        tracks = read_mot(path)
         by_frame = dict(tuple(tracks[tracks["cls"] != BALL].groupby("frame")))
         for frame, truth in gt.groupby("frame"):
             pred = by_frame.get(frame)

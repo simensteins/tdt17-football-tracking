@@ -365,12 +365,35 @@ Tracking with the chosen settings on game 6 (last epochs; RF-DETR from D5 for co
 ### Final detector, second version: all six non-test matches and hue augmentation
 - **Chosen after D7:** extra matches and hue augmentation are the only YOLO changes that improved tracking. Both are applied to RF-DETR as well. The other YOLO findings do not transfer or are already in place: RF-DETR trains at a constant low learning rate and was stable without freezing (0.442–0.448 over epochs 2–6), and stride, resolution and model size made no difference.
 - **Hue for RF-DETR** is Albumentations' `HueSaturationValue` with a shift of up to ±90 OpenCV hue units, i.e. half the colour wheel, always on, like `hsv_h=0.5` (`scripts/train_rfdetr.py --hue 0.5`). RF-DETR's default horizontal flip is kept.
-- **4 epochs instead of 6**: an epoch now has 2.5–3× more images, so 4 epochs are still 1.7–2× the training steps of D5's six, and RF-DETR gained little after its second epoch.
+- **2 epochs instead of 6**, about the same training steps as D5's six epochs (28,800 and 34,500 images against 34,200). RF-DETR gained little after its second epoch. A first submission at 4 epochs (80–90 min limits) was estimated to start in 10 days; jobs under 50 minutes start within minutes on the busy GPU queue.
 - **Three runs, in parallel:**
   - `rfdetr-m-gsr-hue`: games 4 and 9 plus GSR games 2, 3 and 5 (14,400 frames), validation on game 6. This checks on validation that the changes help RF-DETR, as they did YOLO, before the final model is used.
   - `rfdetr-m-all-hue`: all six non-test matches (games 2, 3, 4, 5, 6 and 9; 17,250 frames). The final RF-DETR. Its validation set (every 10th game 6 frame) is in the training data, so it only satisfies the loader, and the last epoch is used.
   - `final-m-1280-gsr-hue`: YOLO with D7's recipe on all six matches. If RF-DETR does not gain clearly over D7 on validation, the YOLO is the final detector: nearly as good at a seventh of the cost.
 - `scripts/merge_yolo_datasets.py` combines the folders, since RF-DETR reads one folder per split.
+- To save waiting, both final detectors run detection and tracking on the test set as soon as they finish. Only the one chosen on validation is evaluated there (test run 3).
+
+**Validation check, `rfdetr-m-gsr-hue`** (H100, 19.5 min, 0.10 kWh GPU energy; both RF-DETR runs got H100s, so their times are not comparable with D5's A100 run). Validation mAP@50:95 per epoch (EMA weights): 0.472 0.478.
+
+| Run | mAP@50:95 all | Player | Goalkeeper | Referee | Ball |
+|---|---|---|---|---|---|
+| RF-DETR D5 (2 matches, 6 epochs, last) | 0.448 | 0.608 | 0.405 | 0.580 | 0.198 |
+| RF-DETR, 5 matches + hue (2 epochs, last) | **0.478** | **0.613** | **0.506** | 0.579 | **0.216** |
+
+- **The same changes help RF-DETR as they helped YOLO**, and again mostly through goalkeepers (+0.10). This is the best mAP of all runs (YOLO D7: 0.474), at a third of D5's training steps per match.
+- The final RF-DETR (`rfdetr-m-all-hue`, six matches) took 31.5 min on an H100, 0.13 kWh.
+
+Tracking on game 6 with the chosen pipeline (RF-DETR's tracker thresholds; last epochs):
+
+| Detector | HOTA | People | Ball | DetA | AssA | IDSW | Role accuracy | Goalkeeper recall / precision | Model time per frame |
+|---|---|---|---|---|---|---|---|---|---|
+| YOLO D7 (5 matches + hue) | 65.5 | 66.7 | 43.2 | 73.4 | **58.6** | **538** | 98.2 % | 0.69 / 0.93 | 5.5 ms |
+| RF-DETR D5 (2 matches) | **65.8** | **67.0** | 44.6 | 74.1 | 58.5 | 594 | 97.9 % | 0.54 / 0.92 | 40 ms |
+| RF-DETR, 5 matches + hue | 65.7 | 66.9 | **45.2** | **74.3** | 58.3 | 613 | **98.9 %** | **0.79 / 0.95** | 40 ms |
+
+- **The mAP gain hardly reaches HOTA:** +0.2 over D7, −0.1 against RF-DETR without the changes. The changes again pay off in roles (98.9 %, the best of all runs; goalkeeper recall 0.79) and the ball (+2.0 over D7), not in people tracking.
+- **The YOLO final (`final-m-1280-gsr-hue`) is the final detector**, by the rule set before this run: RF-DETR does not gain clearly in HOTA, and costs 7× the model time. Its role and ball gains are reported as the trade-off.
+- Test detection with the YOLO final: 2.6 ms model time per frame on an H100, 6 min for the 36,750 test frames.
 
 ### Final detector, first version (test runs 1 and 2): trained on all three non-test matches
 - **Settings chosen on validation:** YOLO26m at 1280, frozen backbone, AdamW at learning rate 0.0002, 8 epochs (`final-m-1280-trainval`).
@@ -560,7 +583,7 @@ Detections from COCO-pretrained YOLO26m at 1280, no fine-tuning (`scripts/detect
 
 ---
 
-## Test set: final pipeline (games 7, 8, 11; 49 clips, 36,750 frames; evaluated once)
+## Test set: final pipeline (games 7, 8, 11; 49 clips, 36,750 frames; three runs, all reported)
 Final detector (YOLO26m at 1280, frozen backbone, trained on games 4, 6 and 9, last epoch) and the chosen tracker (BoT-SORT + camera motion compensation, tuned thresholds, merge 0.7, single ball ≥ 0.2, gaps ≤ 10 frames filled). Nothing was changed after seeing these numbers.
 
 | Subset | HOTA | DetA | AssA | LocA | IDF1 | MOTA | IDSW |
@@ -594,15 +617,43 @@ By clip type: goals 70.6, substitutions 69.9, yellow cards 66.7 … shots on tar
 
 The gain carries over to unseen matches (+1.6 ball HOTA, +7.7 ball MOTA).
 
+**Third test run: second final detector and jersey linking.** After test run 2, extra matches and hue augmentation (D6, D2f, D7) and jersey linking (T7) were chosen on validation. The second final detector (YOLO `final-m-1280-gsr-hue`, six matches with hue augmentation, last epoch) was chosen over RF-DETR on validation before this run. Tracker settings are unchanged. This is the third look at the test set; all three runs are reported.
+
+| Test run | HOTA all | DetA | AssA | HOTA people | AssA people | IDSW | HOTA ball | Role accuracy |
+|---|---|---|---|---|---|---|---|---|
+| 2: first final detector, ball path | 63.1 | 71.6 | 55.8 | 64.4 | 56.1 | **1,340** | **41.4** | 96.4 % |
+| 3 without linking | 63.2 | **72.1** | 55.4 | 64.5 | 55.8 | 1,428 | 40.5 | **98.5 %** |
+| **3: second final detector, jersey linking** | **63.4** | **72.1** | **56.0** | **64.8** | **56.3** | 1,404 | 40.5 | **98.5 %** |
+
+| Group | HOTA all (run 1) | HOTA all (run 3) | Referee recall (run 1) | Referee recall (run 3) | Goalkeeper recall (run 3) |
+|---|---|---|---|---|---|
+| Game 7 | 65.3 | 65.1 | 99.6 % | 99.5 % | 70 % |
+| Game 8 | 61.5 | 62.9 | 99.7 % | 99.2 % | 87 % |
+| Game 11 | 62.0 | 62.2 | 22.5 % | **83.1 %** | 79 % |
+
+| True role (run 3) | Recall | Precision |
+|---|---|---|
+| Player | 0.998 | 0.986 |
+| Goalkeeper | 0.786 | 0.952 |
+| Referee | 0.936 | 0.995 |
+
+By clip type: goals 70.9, shots off target 66.6, shots on target 58.2, corners 55.4.
+
+- **The new detector's gain is in roles, as on validation, not in HOTA.** Detection improves (+0.5 DetA), but association does not (−0.3 AssA, 88 more ID switches), so HOTA without linking is +0.1. The ball loses 0.9.
+- **Hue augmentation fixes game 11's referee:** recall 83 % against 22.5 %. He wears a dark green kit no training match had; with colours scrambled in training, the model learned referees by more than their kit colour. Goalkeeper recall rises from 0.63 to 0.79 at the same precision.
+- **Jersey linking carries over:** 27 tracks joined, +0.3 HOTA and +0.5 AssA on people, close to its +0.4 on validation. Whether each link is correct was not checked on the test set.
+- Jersey reading: 49 CPU jobs (16 cores each), at most 12.7 min per clip.
+
 **Baseline and upper bound on the test set:**
 
 | Pipeline | HOTA all | HOTA people | AssA people | IDSW | HOTA ball |
 |---|---|---|---|---|---|
 | Off-the-shelf: COCO YOLO26m at 1280 + default ByteTrack | 53.4 | 55.0 | 46.4 | 3,902 | 13.7 |
-| **Ours (final pipeline, test run 2)** | **63.1** | **64.4** | **56.1** | **1,340** | **41.4** |
+| Ours (first final pipeline, test run 2) | 63.1 | 64.4 | 56.1 | 1,340 | 41.4 |
+| **Ours (second final pipeline, test run 3)** | **63.4** | **64.8** | **56.3** | 1,404 | 40.5 |
 | Our tracker on perfect detections | 87.7 | 87.1 | 76.7 | 1,264 | 95.7 |
 
-- **The pipeline adds 9.7 HOTA over the off-the-shelf baseline**, cuts ID switches by two thirds and triples ball HOTA. The baseline also cannot tell players, goalkeepers and referees apart.
+- **The pipeline adds 10.0 HOTA over the off-the-shelf baseline** (9.7 in test run 2), cuts ID switches by almost two thirds and triples ball HOTA. The baseline also cannot tell players, goalkeepers and referees apart.
 
 **Upper bound on the test set:** the same tracker on perfect detections (ground truth without IDs, no box merging) reaches **HOTA 87.7** (people 87.1, AssA 77.7; ball 95.7). Detection errors cost about 25 HOTA. Even with perfect boxes, association stops at AssA 78: players who leave the picture and come back get new IDs.
 

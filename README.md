@@ -96,7 +96,7 @@ RF-DETR reads one folder per split, so the course and GSR frames are combined wi
 Y=/cluster/work/$USER/yolo
 python scripts/merge_yolo_datasets.py --out $Y/rfdetr-gsr \
     --train $Y/stride5/images/train $Y/gsr-stride5/images/train --val $Y/stride5/images/val
-python scripts/train_rfdetr.py $Y/rfdetr-gsr --size medium --resolution 1280 --epochs 4 --hue 0.5 --out <run dir>
+python scripts/train_rfdetr.py $Y/rfdetr-gsr --size medium --resolution 1280 --epochs 2 --hue 0.5 --out <run dir>
 ```
 
 ## Repository layout
